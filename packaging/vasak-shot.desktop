@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Capturas
+Name[en]=Screenshots
+Comment=Sacar una captura de la pantalla
+Comment[en]=Take a screenshot of the screen
+Exec=vasak-shot
+Icon=applets-screenshooter
+Terminal=false
+Categories=Graphics;Utility;
+Keywords=captura;pantalla;screenshot;
+# No aparece en el menú con una ventana propia: el selector se abre, se usa y se
+# cierra. Sin esto, el gestor de ventanas le reserva un lugar en la barra de
+# tareas que nunca se llena.
+StartupNotify=false

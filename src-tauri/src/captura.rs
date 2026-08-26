@@ -224,6 +224,16 @@ pub fn copiar_al_portapapeles(ruta: &Path) -> Result<(), String> {
     let mut hijo = Command::new("wl-copy")
         .args(["--type", "image/png"])
         .stdin(Stdio::piped())
+        // La salida va a `null`, y no es cosmético.
+        //
+        // `wl-copy` se demoniza para seguir sirviendo el portapapeles después de
+        // que su padre termina, y ese proceso hereda nuestra salida estándar. Con
+        // los descriptores heredados, **quien nos llamó se queda esperando que el
+        // pipe se cierre** — y no se cierra mientras el portapapeles tenga la
+        // imagen. Desde una terminal se ve como si la herramienta se hubiera
+        // colgado; desde un atajo de teclado, como si nunca hubiera terminado.
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
         .map_err(|e| format!("no se pudo ejecutar wl-copy: {e}"))?;
 

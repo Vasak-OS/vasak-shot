@@ -9,3 +9,11 @@ inicio:
   titulo: Hello, VasakOS
   descripcion: This is the template. Replace this screen with your own.
   saludo: "Hello, {0}"
+shot:
+  errorImagen: The screenshot could not be displayed. That is a configuration problem, not a screen problem.
+  instruccion: Drag to choose an area, or save the whole screen
+  copiar: Copy
+  guardar: Save
+  cancelar: Cancel
+  copiada: Copied to the clipboard
+  guardadaEn: "Saved to {0}"

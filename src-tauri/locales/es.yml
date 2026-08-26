@@ -19,3 +19,11 @@ inicio:
   descripcion: Esta es la plantilla. Reemplazá esta pantalla por la tuya.
   # `t()` no interpola: el marcador se reemplaza a mano. Ver el README.
   saludo: "Hola, {0}"
+shot:
+  errorImagen: No se pudo mostrar la captura. Es un problema de configuración, no de la pantalla.
+  instruccion: Arrastrá para elegir una zona, o guardá toda la pantalla
+  copiar: Copiar
+  guardar: Guardar
+  cancelar: Cancelar
+  copiada: Copiada al portapapeles
+  guardadaEn: "Guardada en {0}"
