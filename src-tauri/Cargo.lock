@@ -3530,6 +3530,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tauri-plugin-vsk-journal"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e191d030a25b63d9ead82ff31b7a6ef8317ac45024103d65240505e137d9208c"
+dependencies = [
+ "serde",
+ "tauri",
+ "tauri-plugin",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "tauri-runtime"
 version = "2.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4122,6 +4134,7 @@ dependencies = [
  "tauri-plugin-shell",
  "tauri-plugin-vicons",
  "tauri-plugin-vsk-contextual-menu",
+ "tauri-plugin-vsk-journal",
 ]
 
 [[package]]

@@ -5,6 +5,7 @@ import { createPinia } from 'pinia';
 import { createApp } from 'vue';
 import App from '@/App.vue';
 import '@/assets/main.css';
+import { captureFailures } from '@vasakgroup/plugin-vsk-journal';
 
 /**
  * Cuánto se espera a las traducciones antes de montar.
@@ -71,6 +72,12 @@ document.addEventListener('securitypolicyviolation', (evento) => {
 // El clic derecho abre el menú de VasakOS —el mismo de todo el escritorio— y no
 // el del motor del navegador, que ofrece «Recargar» e «Inspeccionar elemento».
 setupContextMenu({ iconResolver: getIconSource });
+
+// Lo que rompe la interfaz va al diario del sistema, con el nombre de esta
+// aplicación. Antes no iba a ninguna parte: un error de JavaScript deja la
+// pantalla a medias y la consola del WebView no la ve nadie en una máquina
+// instalada.
+captureFailures();
 
 const app = createApp(App);
 const pinia = createPinia();

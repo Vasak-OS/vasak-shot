@@ -41,6 +41,7 @@ gtk-layer-shell = "0.8"
 # Recortar la captura. Sólo PNG: es lo que da `grim` y lo que se guarda, así que
 # no hace falta arrastrar los decodificadores de todo lo demás.
 image = { version = "0.25", default-features = false, features = ["png"] }
+tauri-plugin-vsk-journal = "2"
 
 [dev-dependencies]
 # Sólo para el test que valida los catálogos de idioma: el plugin los parsea en
