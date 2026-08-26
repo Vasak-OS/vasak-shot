@@ -217,9 +217,13 @@ const estilo = computed(() => {
 			</button>
 		</div>
 
+		<!-- Con fondo propio, no suelto sobre la imagen: el cuadro congelado puede
+		     ser cualquier cosa —una terminal llena de texto, una foto clara— y sin
+		     un respaldo la instrucción quedaba ilegible justo cuando más se
+		     necesita, que es la primera vez que alguien abre esto. -->
 		<p
 			v-if="!region"
-			class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-white/70 text-sm"
+			class="-translate-x-1/2 -translate-y-1/2 absolute top-1/2 left-1/2 rounded-corner bg-black/70 px-4 py-2 text-sm text-white/90"
 		>
 			{{ t('shot.instruccion') }}
 		</p>
