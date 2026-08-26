@@ -33,6 +33,15 @@ tauri-plugin-shell = "2"
 # Para la ventana sin decoración: la barra propia necesita mover y redimensionar.
 gtk = "0.18"
 
+# La superficie de selección tapa **todo**, panel incluido, así que no puede ser
+# una ventana normal: va en la capa de superposición del compositor. Mismo
+# mecanismo que usan el escritorio y el selector de acentos.
+gtk-layer-shell = "0.8"
+
+# Recortar la captura. Sólo PNG: es lo que da `grim` y lo que se guarda, así que
+# no hace falta arrastrar los decodificadores de todo lo demás.
+image = { version = "0.25", default-features = false, features = ["png"] }
+
 [dev-dependencies]
 # Sólo para el test que valida los catálogos de idioma: el plugin los parsea en
 # tiempo de ejecución y **paniquea** si no puede, así que un error de sintaxis no
