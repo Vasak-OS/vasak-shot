@@ -4007,7 +4007,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "vapp"
+name = "vasak-shot"
 version = "0.1.0"
 dependencies = [
  "gtk",
