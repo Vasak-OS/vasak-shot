@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Vasak Shot",
+  "productName": "vasak-shot",
   "version": "0.1.0",
   "identifier": "ar.net.vasak.vasak-shot",
   "build": {
@@ -41,6 +41,7 @@
         "files": {}
       },
       "deb": {
+      "desktopTemplate": "vasak-shot.desktop.hbs",
         "depends": [
           "libcairo2",
           "desktop-file-utils",
@@ -56,12 +57,6 @@
         "files": {}
       }
     },
-    "icon": [
-      "icons/32x32.png",
-      "icons/128x128.png",
-      "icons/128x128@2x.png",
-      "icons/icon.icns",
-      "icons/icon.ico"
-    ]
+    "icon": ["icons/icon.png"]
   }
 }
