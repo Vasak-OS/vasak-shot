@@ -152,18 +152,21 @@ const estilo = computed(() => {
 		@mouseup="terminar"
 	>
 		<!-- El velo se apaga en cuanto hay una selección: con los dos, la zona
-		     elegida quedaría oscurecida dos veces. -->
+		     elegida quedaría oscurecida dos veces.
+		     Negro y no un color del tema: no es una superficie de la interfaz
+		     sino una atenuación sobre la captura, y tiene que oscurecer igual con
+		     el tema claro. -->
 		<div v-if="!region" class="absolute inset-0 bg-black/55"></div>
 
 		<!-- El recorte de la selección se hace con una sombra enorme en lugar de
 		     cuatro divs: así el borde queda pegado al rectángulo sin cuentas. -->
 		<div
 			v-if="region"
-			class="absolute rounded-[2px] border border-primary shadow-[0_0_0_9999px_rgba(0,0,0,0.55)]"
+			class="absolute rounded-corner border border-primary shadow-[0_0_0_9999px_rgba(0,0,0,0.55)]"
 			:style="estilo"
 		>
 			<span
-				class="-top-7 absolute left-0 whitespace-nowrap rounded bg-primary px-2 py-0.5 font-mono text-white text-xs"
+				class="-top-7 absolute left-0 whitespace-nowrap rounded-corner bg-primary px-2 py-0.5 font-mono text-tx-on-primary text-xs"
 			>
 				{{ medidas }}
 			</span>
@@ -171,49 +174,49 @@ const estilo = computed(() => {
 
 		<div
 			v-if="error"
-			class="absolute top-6 left-1/2 -translate-x-1/2 rounded-corner bg-status-error/90 px-4 py-2 text-sm text-white"
+			class="absolute top-6 left-1/2 -translate-x-1/2 rounded-corner bg-status-error/90 px-4 py-2 text-sm text-tx-on-primary"
 		>
 			{{ error }}
 		</div>
 
 		<div
 			v-if="aviso"
-			class="absolute top-6 left-1/2 -translate-x-1/2 rounded-corner bg-black/80 px-4 py-2 text-sm text-white"
+			class="absolute top-6 left-1/2 -translate-x-1/2 rounded-corner border border-ui-border bg-ui-bg/80 px-4 py-2 text-sm text-tx-main"
 		>
 			{{ aviso }}
 		</div>
 
 		<div
-			class="absolute bottom-8 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-corner border border-white/15 bg-black/85 p-1.5"
+			class="absolute bottom-8 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-corner border border-ui-border bg-ui-bg/80 p-1.5"
 		>
-			<span class="px-2 font-mono text-white/70 text-xs">{{ medidas }}</span>
-			<span class="h-5 w-px bg-white/20"></span>
+			<span class="px-2 font-mono text-tx-muted text-xs">{{ medidas }}</span>
+			<span class="h-5 w-px bg-ui-border"></span>
 			<button
 				type="button"
-				class="flex items-center gap-1.5 rounded px-3 py-1.5 text-sm text-white/80 hover:bg-white/10 disabled:opacity-50"
+				class="flex items-center gap-1.5 rounded-corner px-3 py-1.5 text-sm text-tx-main hover:bg-ui-surface disabled:opacity-50"
 				:disabled="trabajando"
 				@click="entregar('copiar')"
 			>
 				{{ t('shot.copiar') }}
-				<kbd class="font-mono text-[10px] text-white/50">Ctrl+C</kbd>
+				<kbd class="font-mono text-[10px] text-tx-muted">{{ t('shot.teclaCopiar') }}</kbd>
 			</button>
 			<button
 				type="button"
-				class="flex items-center gap-1.5 rounded bg-primary px-3 py-1.5 font-medium text-sm text-white hover:brightness-110 disabled:opacity-50"
+				class="flex items-center gap-1.5 rounded-corner bg-primary px-3 py-1.5 font-medium text-sm text-tx-on-primary hover:brightness-110 disabled:opacity-50"
 				:disabled="trabajando"
 				@click="entregar('guardar_y_copiar')"
 			>
 				{{ t('shot.guardar') }}
-				<kbd class="font-mono text-[10px] text-white/70">Intro</kbd>
+				<kbd class="font-mono text-[10px] text-tx-on-primary/70">{{ t('shot.teclaGuardar') }}</kbd>
 			</button>
-			<span class="h-5 w-px bg-white/20"></span>
+			<span class="h-5 w-px bg-ui-border"></span>
 			<button
 				type="button"
-				class="rounded px-3 py-1.5 text-sm text-white/60 hover:bg-white/10"
+				class="rounded-corner px-3 py-1.5 text-sm text-tx-muted hover:bg-ui-surface"
 				@click="salir()"
 			>
 				{{ t('shot.cancelar') }}
-				<kbd class="ml-1 font-mono text-[10px] text-white/40">Esc</kbd>
+				<kbd class="ml-1 font-mono text-[10px] text-tx-muted">{{ t('shot.teclaCancelar') }}</kbd>
 			</button>
 		</div>
 
@@ -223,7 +226,7 @@ const estilo = computed(() => {
 		     necesita, que es la primera vez que alguien abre esto. -->
 		<p
 			v-if="!region"
-			class="-translate-x-1/2 -translate-y-1/2 absolute top-1/2 left-1/2 rounded-corner bg-black/70 px-4 py-2 text-sm text-white/90"
+			class="-translate-x-1/2 -translate-y-1/2 absolute top-1/2 left-1/2 rounded-corner border border-ui-border bg-ui-bg/80 px-4 py-2 text-sm text-tx-main"
 		>
 			{{ t('shot.instruccion') }}
 		</p>

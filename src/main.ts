@@ -1,6 +1,8 @@
+import { useConfigStore } from '@vasakgroup/plugin-config-manager';
 import { getIconSource } from '@vasakgroup/plugin-vicons';
 import { setupContextMenu } from '@vasakgroup/plugin-vsk-contextual-menu';
 import I18n from '@vasakgroup/tauri-plugin-i18n';
+import type { Store } from 'pinia';
 import { createPinia } from 'pinia';
 import { createApp } from 'vue';
 import App from '@/App.vue';
@@ -90,15 +92,27 @@ app.config.errorHandler = (error, _instancia, info) => {
 	console.error(`[vue] falló en ${info}:`, error);
 };
 
-// Se esperan las traducciones antes de montar, con plazo: montando primero, el
-// arranque enseña las claves crudas hasta que el archivo de idioma termina de
-// cargar.
+// Se esperan las traducciones y los colores antes de montar, con plazo.
+//
+// Los colores llegan por la configuración, como en el resto del escritorio, y
+// acá nadie los pedía: la interfaz quedaba con la paleta clara por omisión
+// aunque la sesión estuviera en oscuro. Se espera **antes** de montar y no en
+// `onMounted` porque esta pantalla aparece de golpe sobre la captura y se usa en
+// dos segundos: un destello en claro y después el cambio se ve peor que la
+// espera.
 await Promise.race([
-	I18n.getInstance()
-		.load()
-		.catch((error) => {
-			console.error('No se pudieron cargar las traducciones', error);
-		}),
+	Promise.all([
+		I18n.getInstance()
+			.load()
+			.catch((error) => {
+				console.error('No se pudieron cargar las traducciones', error);
+			}),
+		(useConfigStore() as Store<'config', { config: unknown; loadConfig: () => Promise<void> }>)
+			.loadConfig()
+			.catch((error: unknown) => {
+				console.error('No se pudo cargar la configuración', error);
+			}),
+	]),
 	new Promise((resolve) => setTimeout(resolve, PLAZO_TRADUCCIONES_MS)),
 ]);
 
