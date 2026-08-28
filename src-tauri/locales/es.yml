@@ -27,3 +27,6 @@ shot:
   cancelar: Cancelar
   copiada: Copiada al portapapeles
   guardadaEn: "Guardada en {0}"
+  teclaCopiar: Ctrl+C
+  teclaGuardar: Intro
+  teclaCancelar: Esc
