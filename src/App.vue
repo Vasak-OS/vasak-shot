@@ -14,10 +14,23 @@ import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { interpolar } from '@/tools/interpolar';
 import { medidasDe, type Region, aEntregar as regionAEntregar, regionEntre } from '@/tools/region';
 
-interface Lienzo {
-	ruta: string;
+interface Salida {
+	x: number;
+	y: number;
 	ancho: number;
 	alto: number;
+}
+
+interface Lienzo {
+	ruta: string;
+	/** El tamaño de la captura entera, con todas las salidas. */
+	ancho: number;
+	alto: number;
+	/** La salida que esta ventana está tapando, en unidades del layout. */
+	salida: Salida;
+	/** Píxeles de la captura por unidad del layout, por eje. */
+	escalaX: number;
+	escalaY: number;
 }
 
 const { t } = useI18n();
@@ -42,8 +55,16 @@ const hasta = ref<{ x: number; y: number } | null>(null);
  */
 const region = computed<Region | null>(() => regionEntre(desde.value, hasta.value));
 
-/** La región que se va a entregar: la elegida, o toda la pantalla si no hay. */
-const aEntregar = computed<Region | null>(() => regionAEntregar(region.value, lienzo.value));
+/**
+ * La región que se va a entregar: la elegida, o toda **esta** pantalla si no hay.
+ *
+ * Esta pantalla y no la captura entera. Las coordenadas que se mandan son las de
+ * la ventana, y la ventana cubre una sola salida; entregar el tamaño de la
+ * composición pediría un rectángulo que no existe acá. Rust lo traduce después.
+ */
+const aEntregar = computed<Region | null>(() =>
+	regionAEntregar(region.value, lienzo.value?.salida ?? null)
+);
 
 const medidas = computed(() => medidasDe(aEntregar.value));
 
@@ -131,6 +152,28 @@ onMounted(async () => {
 
 onUnmounted(() => window.removeEventListener('keydown', alTeclado));
 
+/**
+ * El fondo: **el pedazo de la captura que corresponde a esta pantalla**.
+ *
+ * Antes era `backgroundSize: 100% 100%`, o sea la composición entera estirada
+ * dentro de una sola salida. Con dos monitores de 1920x1080 apilados, eso mostraba
+ * los dos achatados a la mitad — y lo que se elegía no era lo que se recortaba.
+ *
+ * La cuenta tiene dos pasos. Primero la imagen se lleva a unidades del layout
+ * dividiendo por la escala, así un píxel CSS es una unidad del layout. Después se
+ * corre el origen hasta la esquina de esta salida, con posición negativa.
+ */
+const estiloFondo = computed(() => {
+	const l = lienzo.value;
+	if (!fondo.value || !l) return {};
+	return {
+		backgroundImage: `url(${fondo.value})`,
+		backgroundSize: `${l.ancho / l.escalaX}px ${l.alto / l.escalaY}px`,
+		backgroundPosition: `${-l.salida.x}px ${-l.salida.y}px`,
+		backgroundRepeat: 'no-repeat',
+	};
+});
+
 const estilo = computed(() => {
 	const r = region.value;
 	if (!r) return { display: 'none' };
@@ -146,7 +189,7 @@ const estilo = computed(() => {
 <template>
 	<main
 		class="fixed inset-0 select-none overflow-hidden"
-		:style="fondo ? { backgroundImage: `url(${fondo})`, backgroundSize: '100% 100%' } : {}"
+		:style="estiloFondo"
 		@mousedown="empezar"
 		@mousemove="mover"
 		@mouseup="terminar"

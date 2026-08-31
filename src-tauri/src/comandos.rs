@@ -1,6 +1,6 @@
 //! Lo que el frontend puede pedir.
 
-use crate::captura::{self, Region};
+use crate::captura::{self, Region, Salida};
 use crate::destino;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
@@ -15,6 +15,32 @@ fn pendiente() -> &'static Mutex<Option<captura::Captura>> {
     PENDIENTE.get_or_init(|| Mutex::new(None))
 }
 
+/// Dónde quedó el selector: su salida, y el layout del que forma parte.
+///
+/// Las dos cosas juntas son lo que permite traducir la selección — la ventana
+/// cubre **una** pantalla y la captura contiene **todas**—, así que viajan juntas
+/// en lugar de como una tupla que nadie puede leer.
+#[derive(Debug, Clone, Copy)]
+struct Geometria {
+    salida: Salida,
+    /// El rectángulo que abarcan todas las salidas, **con su origen**: `grim`
+    /// compone desde ahí, y no siempre es (0, 0).
+    layout: Salida,
+}
+
+/// La geometría del selector, anotada desde `setup` cuando ya existe la ventana.
+fn geometria() -> &'static Mutex<Option<Geometria>> {
+    static GEOMETRIA: OnceLock<Mutex<Option<Geometria>>> = OnceLock::new();
+    GEOMETRIA.get_or_init(|| Mutex::new(None))
+}
+
+/// Anota la salida que el selector tapó y el tamaño del layout entero.
+pub fn recordar_salida(salida: Salida, layout: Salida) {
+    if let Ok(mut guardia) = geometria().lock() {
+        *guardia = Some(Geometria { salida, layout });
+    }
+}
+
 /// Guarda la captura recién tomada para que el selector la muestre.
 pub fn recordar(c: captura::Captura) {
     if let Ok(mut guardia) = pendiente().lock() {
@@ -24,13 +50,28 @@ pub fn recordar(c: captura::Captura) {
 
 /// Lo que el selector necesita para dibujarse.
 #[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Lienzo {
     /// La ruta del PNG congelado. El frontend la convierte con `convertFileSrc`:
     /// `file://` no está permitido por la política de contenido, y está bien que
     /// no lo esté.
     pub ruta: String,
+    /// El tamaño de la captura **entera**, con todas las salidas.
     pub ancho: u32,
     pub alto: u32,
+    /// La salida que el selector está tapando, **relativa al origen del layout**.
+    ///
+    /// El frontend la necesita para mostrar **su pedazo** de la captura. Sin esto
+    /// estiraba la composición completa dentro de una pantalla, y con dos
+    /// monitores apilados eso significa verlos los dos achatados a la mitad.
+    ///
+    /// Relativa y no absoluta a propósito: el origen del layout puede ser
+    /// negativo, y así el frontend usa estos números tal cual para desplazar el
+    /// fondo, sin tener que saber nada del layout.
+    pub salida: Salida,
+    /// Cuántos píxeles de la captura hay por unidad del layout, por eje.
+    pub escala_x: f64,
+    pub escala_y: f64,
 }
 
 #[tauri::command]
@@ -41,15 +82,58 @@ pub fn lienzo() -> Result<Lienzo, String> {
     let c = guardia
         .as_ref()
         .ok_or_else(|| "todavía no hay ninguna captura".to_string())?;
+    let (salida, escala) = salida_y_escala(c.ancho, c.alto);
+
     Ok(Lienzo {
         ruta: c.ruta.to_string_lossy().into_owned(),
         ancho: c.ancho,
         alto: c.alto,
+        salida,
+        escala_x: escala.0,
+        escala_y: escala.1,
     })
+}
+
+/// La salida del selector y la escala de la captura, con respaldo razonable.
+///
+/// Si la geometría no se pudo averiguar —`setup` no encontró el puntero, o la
+/// ventana no expuso su GtkWindow— se supone **una sola pantalla del tamaño de la
+/// captura**. Eso es exactamente lo que había antes de este arreglo y funciona
+/// bien en ese caso, que es el más común; lo que no hace es inventar un origen.
+fn salida_y_escala(ancho: u32, alto: u32) -> (Salida, (f64, f64)) {
+    let anotada = geometria().lock().ok().and_then(|g| *g);
+    match anotada {
+        // Relativa al origen del layout: es el espacio en el que `grim` compone.
+        Some(g) => (
+            g.salida.relativa_a(g.layout),
+            captura::escala_de((ancho, alto), g.layout),
+        ),
+        None => (Salida::entera(ancho as i32, alto as i32), (1.0, 1.0)),
+    }
+}
+
+/// Lleva la selección de la ventana a píxeles de la captura.
+///
+/// Todos los comandos pasan por acá: `guardar`, `copiar` y `guardar_y_copiar`. Que
+/// sea uno solo es a propósito — cuando la traducción faltaba, faltaba en los tres
+/// y había que arreglarla tres veces.
+fn traducir(region: Region) -> Result<Region, String> {
+    let (ancho, alto) = {
+        let guardia = pendiente()
+            .lock()
+            .map_err(|_| "el estado de la captura quedó envenenado".to_string())?;
+        let c = guardia
+            .as_ref()
+            .ok_or_else(|| "todavía no hay ninguna captura".to_string())?;
+        (c.ancho, c.alto)
+    };
+    let (salida, escala) = salida_y_escala(ancho, alto);
+    Ok(region.en_la_captura(salida, escala))
 }
 
 /// Recorta a la región elegida y devuelve el archivo final.
 fn producir(region: Region) -> Result<PathBuf, String> {
+    let region = traducir(region)?;
     let origen = {
         let guardia = pendiente()
             .lock()
@@ -80,6 +164,7 @@ pub fn guardar(region: Region) -> Result<String, String> {
 /// que después hay que borrar a mano.
 #[tauri::command]
 pub fn copiar(region: Region) -> Result<(), String> {
+    let region = traducir(region)?;
     let origen = {
         let guardia = pendiente()
             .lock()

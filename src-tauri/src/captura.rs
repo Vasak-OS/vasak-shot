@@ -18,11 +18,30 @@
 //!
 //! `grim` ya habla `zwlr_screencopy` correctamente, maneja varias salidas y sus
 //! escalas, y viene instalado en la ISO. Reimplementarlo sería reescribir la parte
-//! difícil para llegar al mismo lugar. Se recorta acá y no con `grim -g` por dos
-//! razones: una sola captura en lugar de dos, y porque la geometría de `grim` está
-//! en coordenadas del layout de salidas —que en esta máquina no coinciden con las
-//! de la pantalla, así que `-g "0,0 400x300"` contesta «did not intersect with any
-//! outputs"—.
+//! difícil para llegar al mismo lugar. Se recorta acá y no con `grim -g` por una
+//! razón: una sola captura en lugar de dos, así lo que se guarda es exactamente el
+//! instante que se vio.
+//!
+//! # Dos espacios de coordenadas, y por qué se confundían
+//!
+//! `grim` sin argumentos compone **todas** las salidas en una sola imagen, puestas
+//! donde el layout las tiene. La ventana del selector, en cambio, es una
+//! superficie de `gtk-layer-shell`, y una superficie de layer-shell vive en **una**
+//! salida.
+//!
+//! Así que hay dos espacios: los píxeles de la captura compuesta y los de la
+//! ventana. Durante un tiempo se usaron como si fueran el mismo —el `clientX` del
+//! ratón entraba directo como coordenada de la imagen— y en una sola pantalla eso
+//! funciona por casualidad, porque los dos orígenes coinciden.
+//!
+//! Con dos pantallas no. Con dos monitores de 1920x1080 apilados en vertical, la
+//! composición mide 1920x2160 y la ventana 1920x1080: **todo lo que se elegía en
+//! la pantalla de abajo se recortaba de la de arriba**. Y el comentario de acá
+//! culpaba a la geometría de `grim` por «no coincidir con las de la pantalla»,
+//! cuando lo que no coincidía era esto.
+//!
+//! `Region::en_la_captura` es la traducción, y es donde vive la única cuenta que
+//! importa: sumar el origen de la salida y multiplicar por la escala.
 
 use std::path::{Path, PathBuf};
 
@@ -71,6 +90,38 @@ impl Region {
         Self { x, y, ancho, alto }
     }
 
+    /// Lleva una selección hecha en la ventana a píxeles de la captura compuesta.
+    ///
+    /// Es la cuenta que faltaba. La ventana del selector cubre **una** salida y su
+    /// origen es la esquina de esa salida; la captura contiene **todas**, puestas
+    /// donde el layout las tiene. Sin sumar el origen de la salida, elegir en el
+    /// segundo monitor recorta del primero: con dos pantallas apiladas, un clic en
+    /// `y = 40` de la de abajo se leía como `y = 40` de la de arriba.
+    ///
+    /// La escala se aplica después de sumar, no antes: el origen de la salida está
+    /// en unidades del layout igual que la selección.
+    ///
+    /// `salida` tiene que venir **relativa al origen del layout** —ver
+    /// `Salida::relativa_a`—, porque es en ese espacio donde `grim` compone.
+    ///
+    /// El tamaño sale de restar los dos bordes ya transformados, no de escalar el
+    /// ancho por su cuenta. Con escala fraccionaria las dos cuentas no dan lo
+    /// mismo: con escala 1.25, la selección `[2, 4)` tiene su borde derecho en
+    /// `6 - 3 = 3`, mientras que redondear el ancho aparte da `round(2 * 1.25) =
+    /// 3`… y para `[2, 3)` daría un píxel de más. El borde manda, porque es lo
+    /// que decide qué píxeles entran.
+    pub fn en_la_captura(self, salida: Salida, escala: (f64, f64)) -> Self {
+        let n = self.normalizada();
+        let (ex, ey) = escala;
+
+        let x0 = (f64::from(salida.x + n.x) * ex).round() as i32;
+        let y0 = (f64::from(salida.y + n.y) * ey).round() as i32;
+        let x1 = (f64::from(salida.x + n.x + n.ancho) * ex).round() as i32;
+        let y1 = (f64::from(salida.y + n.y + n.alto) * ey).round() as i32;
+
+        Self { x: x0, y: y0, ancho: x1 - x0, alto: y1 - y0 }
+    }
+
     /// Recorta la región a lo que de verdad existe en la imagen.
     ///
     /// Se puede arrastrar más allá del borde de la pantalla —el puntero llega, la
@@ -98,6 +149,56 @@ impl Region {
             alto: y1 - y0,
         })
     }
+}
+
+/// Una salida y dónde cae dentro del layout.
+///
+/// Las coordenadas son las del layout de salidas, que es el mismo espacio en el
+/// que `grim` compone: una salida en `y = 1080` aporta sus píxeles a partir de esa
+/// altura de la imagen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct Salida {
+    pub x: i32,
+    pub y: i32,
+    pub ancho: i32,
+    pub alto: i32,
+}
+
+impl Salida {
+    /// La salida que cubre todo el layout, para cuando hay una sola pantalla.
+    pub fn entera(ancho: i32, alto: i32) -> Self {
+        Self { x: 0, y: 0, ancho, alto }
+    }
+
+    /// Esta salida con el origen del layout restado.
+    ///
+    /// Hace falta porque **el origen del layout no siempre es (0, 0)**. Un
+    /// monitor puesto a la izquierda o arriba del primario tiene coordenadas
+    /// negativas, y `grim` compone desde la esquina del rectángulo que abarca
+    /// todo: su píxel (0, 0) es el origen mínimo, no el cero del layout. Sin
+    /// restarlo, una salida en `x = -1920` pediría un recorte en `x` negativo.
+    pub fn relativa_a(self, layout: Salida) -> Self {
+        Self { x: self.x - layout.x, y: self.y - layout.y, ..self }
+    }
+}
+
+/// Cuántos píxeles de la captura hay por cada unidad del layout.
+///
+/// Normalmente uno: el layout está en píxeles lógicos y `grim` compone a esa
+/// escala. En una pantalla HiDPI con escala 2, la imagen sale al doble y esta
+/// razón lo absorbe sin que nadie más tenga que saberlo.
+///
+/// Se calcula de los números reales —el tamaño de la imagen contra el del
+/// layout— en lugar de leer el factor de escala de cada salida, porque lo que
+/// importa es la relación que de verdad quedó, no la que debería haber quedado.
+///
+/// Con salidas de escalas distintas `grim` compone a la mayor, así que esta razón
+/// única deja de ser exacta para las de menor escala. Es el caso raro y no lo
+/// cubre esta cuenta; hacerlo bien exige capturar salida por salida con `grim -o`.
+pub fn escala_de(imagen: (u32, u32), layout: Salida) -> (f64, f64) {
+    let ex = if layout.ancho > 0 { f64::from(imagen.0) / f64::from(layout.ancho) } else { 1.0 };
+    let ey = if layout.alto > 0 { f64::from(imagen.1) / f64::from(layout.alto) } else { 1.0 };
+    (ex, ey)
 }
 
 /// Alto y ancho de un PNG, leídos de su cabecera.
@@ -395,6 +496,172 @@ mod tests {
         assert!(!dir.join("no.png").exists());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── Varias pantallas ────────────────────────────────────────────────
+
+    /// Dos monitores de 1920x1080 apilados en vertical: el layout de la máquina
+    /// donde apareció el bug. La composición de `grim` mide 1920x2160 y la
+    /// ventana del selector 1920x1080.
+    fn apilados() -> (Salida, Salida, (f64, f64)) {
+        let arriba = Salida { x: 0, y: 0, ancho: 1920, alto: 1080 };
+        let abajo = Salida { x: 0, y: 1080, ancho: 1920, alto: 1080 };
+        let escala = escala_de((1920, 2160), Salida::entera(1920, 2160));
+        (arriba, abajo, escala)
+    }
+
+    #[test]
+    fn el_bug_de_los_dos_monitores() {
+        // **Éste es el test del error reportado.** Un recorte hecho en la
+        // pantalla de abajo salía de la de arriba, porque la selección llegaba
+        // en coordenadas de la ventana y se usaba como coordenadas de la
+        // captura sin sumar el origen de la salida.
+        let (arriba, abajo, escala) = apilados();
+        let seleccion = Region { x: 100, y: 40, ancho: 300, alto: 200 };
+
+        // En la pantalla de arriba, el origen es cero y no cambia nada.
+        assert_eq!(
+            seleccion.en_la_captura(arriba, escala),
+            Region { x: 100, y: 40, ancho: 300, alto: 200 }
+        );
+
+        // En la de abajo, la misma selección tiene que caer 1080 más abajo.
+        assert_eq!(
+            seleccion.en_la_captura(abajo, escala),
+            Region { x: 100, y: 1120, ancho: 300, alto: 200 },
+            "la selección de la pantalla de abajo se recortó de la de arriba"
+        );
+    }
+
+    #[test]
+    fn las_dos_pantallas_no_se_pisan() {
+        // Cualquier punto de una salida cae dentro de su mitad de la captura y
+        // nunca en la otra. Es la propiedad que el bug rompía.
+        let (arriba, abajo, escala) = apilados();
+        for y in [0, 1, 540, 1079] {
+            let r = Region { x: 10, y, ancho: 20, alto: 1 };
+            let en_arriba = r.en_la_captura(arriba, escala);
+            let en_abajo = r.en_la_captura(abajo, escala);
+            assert!(en_arriba.y < 1080, "{en_arriba:?} se fue a la pantalla de abajo");
+            assert!(en_abajo.y >= 1080, "{en_abajo:?} se fue a la pantalla de arriba");
+        }
+    }
+
+    #[test]
+    fn tambien_funciona_lado_a_lado() {
+        // El otro layout habitual. Acá el que se corre es el eje x.
+        let derecha = Salida { x: 1920, y: 0, ancho: 1920, alto: 1080 };
+        let escala = escala_de((3840, 1080), Salida::entera(3840, 1080));
+        assert_eq!(
+            Region { x: 5, y: 5, ancho: 100, alto: 100 }.en_la_captura(derecha, escala),
+            Region { x: 1925, y: 5, ancho: 100, alto: 100 }
+        );
+    }
+
+    #[test]
+    fn una_sola_pantalla_no_cambia_nada() {
+        // El caso más común tiene que seguir dando exactamente lo mismo que
+        // antes del arreglo: origen en cero y escala uno.
+        let sola = Salida::entera(1920, 1080);
+        let escala = escala_de((1920, 1080), Salida::entera(1920, 1080));
+        assert_eq!(escala, (1.0, 1.0));
+        let r = Region { x: 33, y: 77, ancho: 200, alto: 150 };
+        assert_eq!(r.en_la_captura(sola, escala), r);
+    }
+
+    #[test]
+    fn una_pantalla_hidpi_multiplica() {
+        // Escala 2: el layout mide 1920x1080 en unidades lógicas y la captura
+        // sale de 3840x2160. Sin multiplicar, el recorte saldría del cuadrante
+        // de arriba a la izquierda y a la mitad de tamaño.
+        let escala = escala_de((3840, 2160), Salida::entera(1920, 1080));
+        assert_eq!(escala, (2.0, 2.0));
+        assert_eq!(
+            Region { x: 100, y: 50, ancho: 300, alto: 200 }
+                .en_la_captura(Salida::entera(1920, 1080), escala),
+            Region { x: 200, y: 100, ancho: 600, alto: 400 }
+        );
+    }
+
+    #[test]
+    fn la_traduccion_normaliza_primero() {
+        // Arrastrando hacia arriba, la selección llega con medidas negativas. Si
+        // se multiplicaran sin normalizar, el resultado tendría un ancho
+        // negativo y el recorte fallaría sin decir por qué.
+        let (_, abajo, escala) = apilados();
+        let arrastre_al_reves = Region { x: 400, y: 240, ancho: -300, alto: -200 };
+        assert_eq!(
+            arrastre_al_reves.en_la_captura(abajo, escala),
+            Region { x: 100, y: 1120, ancho: 300, alto: 200 }
+        );
+    }
+
+    #[test]
+    fn un_layout_de_cero_no_divide_por_cero() {
+        // Si la consulta a GDK devolviera un layout vacío, la escala tiene que
+        // salir uno y no NaN: con NaN el recorte pide coordenadas inventadas.
+        assert_eq!(escala_de((1920, 1080), Salida::entera(0, 0)), (1.0, 1.0));
+    }
+
+    #[test]
+    fn una_salida_a_la_izquierda_del_origen() {
+        // El layout no siempre empieza en (0, 0): un monitor a la izquierda del
+        // primario tiene x negativo, y `grim` compone desde la esquina mínima.
+        // Quedándose sólo con los máximos, el ancho salía mal y el recorte pedía
+        // coordenadas negativas.
+        let layout = Salida { x: -1920, y: 0, ancho: 3840, alto: 1080 };
+        let izquierda = Salida { x: -1920, y: 0, ancho: 1920, alto: 1080 };
+        let primaria = Salida { x: 0, y: 0, ancho: 1920, alto: 1080 };
+        let escala = escala_de((3840, 1080), layout);
+        assert_eq!(escala, (1.0, 1.0));
+
+        let seleccion = Region { x: 10, y: 20, ancho: 100, alto: 50 };
+
+        // La de la izquierda es la que aporta el arranque de la imagen.
+        assert_eq!(
+            seleccion.en_la_captura(izquierda.relativa_a(layout), escala),
+            Region { x: 10, y: 20, ancho: 100, alto: 50 }
+        );
+        // Y la primaria queda desplazada 1920, no en cero.
+        assert_eq!(
+            seleccion.en_la_captura(primaria.relativa_a(layout), escala),
+            Region { x: 1930, y: 20, ancho: 100, alto: 50 }
+        );
+    }
+
+    #[test]
+    fn una_salida_arriba_del_origen() {
+        // El mismo caso en vertical, que es el layout de la máquina del reporte
+        // pero con el monitor externo puesto arriba en coordenadas negativas.
+        let layout = Salida { x: 0, y: -1080, ancho: 1920, alto: 2160 };
+        let arriba = Salida { x: 0, y: -1080, ancho: 1920, alto: 1080 };
+        let abajo = Salida { x: 0, y: 0, ancho: 1920, alto: 1080 };
+        let escala = escala_de((1920, 2160), layout);
+        let r = Region { x: 5, y: 5, ancho: 40, alto: 40 };
+
+        assert_eq!(r.en_la_captura(arriba.relativa_a(layout), escala).y, 5);
+        assert_eq!(r.en_la_captura(abajo.relativa_a(layout), escala).y, 1085);
+    }
+
+    #[test]
+    fn con_escala_fraccionaria_manda_el_borde() {
+        // Escala 1.25, que es la de una portátil común. El tamaño sale de restar
+        // los dos bordes ya transformados: escalando el ancho por su cuenta,
+        // `[2, 4)` daba un borde derecho distinto del que le corresponde.
+        let escala = escala_de((2560, 1600), Salida::entera(2048, 1280));
+        assert_eq!(escala, (1.25, 1.25));
+
+        let sola = Salida::entera(2048, 1280);
+        let r = Region { x: 2, y: 2, ancho: 2, alto: 2 }.en_la_captura(sola, escala);
+
+        // Bordes: round(2*1.25)=3 y round(4*1.25)=5, así que el ancho es 2.
+        assert_eq!(r, Region { x: 3, y: 3, ancho: 2, alto: 2 });
+
+        // Y el borde derecho del recorte cae donde cae el borde transformado, que
+        // es la propiedad que importa: dos regiones pegadas siguen pegadas.
+        let a = Region { x: 0, y: 0, ancho: 3, alto: 1 }.en_la_captura(sola, escala);
+        let b = Region { x: 3, y: 0, ancho: 3, alto: 1 }.en_la_captura(sola, escala);
+        assert_eq!(a.x + a.ancho, b.x, "quedó un hueco o un solape entre dos regiones pegadas");
     }
 
     #[test]
