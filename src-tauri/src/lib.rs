@@ -18,6 +18,8 @@ pub mod comandos;
 pub mod destino;
 mod locales;
 
+use captura::Salida;
+use gtk::prelude::*;
 use gtk_layer_shell::LayerShell;
 use tauri::Manager;
 
@@ -46,23 +48,61 @@ pub fn modo_de(argumentos: &[String]) -> Modo {
     }
 }
 
-/// Deja la ventana del selector tapando todo, panel incluido.
+/// La salida donde está el puntero, y el rectángulo que ocupa en el layout.
+///
+/// El puntero y no la salida primaria: quien aprieta la tecla de captura está
+/// mirando la pantalla donde tiene el ratón, y esperar que el selector aparezca
+/// en la otra es de las cosas que hacen sentir que la herramienta está rota.
+fn salida_del_puntero(display: &gtk::gdk::Display) -> Option<(gtk::gdk::Monitor, Salida)> {
+    let asiento = display.default_seat()?;
+    let puntero = asiento.pointer()?;
+    let (_, x, y) = puntero.position();
+    let monitor = display.monitor_at_point(x, y)?;
+    let g = monitor.geometry();
+    Some((
+        monitor,
+        Salida { x: g.x(), y: g.y(), ancho: g.width(), alto: g.height() },
+    ))
+}
+
+/// El rectángulo que abarcan todas las salidas juntas.
+///
+/// Es el mismo espacio en el que `grim` compone, así que sirve para saber cuántos
+/// píxeles de imagen hay por unidad de layout — ver `captura::escala_de`.
+fn layout_de(display: &gtk::gdk::Display) -> (i32, i32) {
+    let mut ancho = 0;
+    let mut alto = 0;
+    for i in 0..display.n_monitors() {
+        if let Some(m) = display.monitor(i) {
+            let g = m.geometry();
+            ancho = ancho.max(g.x() + g.width());
+            alto = alto.max(g.y() + g.height());
+        }
+    }
+    (ancho, alto)
+}
+
+/// Deja la ventana del selector tapando una salida, panel incluido, y dice cuál.
 ///
 /// En la capa de superposición y anclada a los cuatro bordes: una ventana normal
 /// quedaría debajo del panel y por encima nada más, así que la selección no
 /// podría llegar a lo que el panel tapa. Y con teclado, que es lo que permite
-/// confirmar con Intro y salir con Esc.
-/// La ventana arranca oculta y se muestra desde acá, después del layer-shell.
+/// confirmar con Intro y salir con Esc. La ventana arranca oculta y se muestra
+/// desde afuera, después del layer-shell.
 ///
 /// El orden no es negociable: `init_layer_shell` sobre una ventana ya mapeada
 /// aborta con «assertion '!gtk_widget_get_mapped' failed», y a partir de ahí cada
 /// llamada siguiente avisa «GtkWindow is not a layer surface». El resultado es una
 /// ventana de 800x600 con decoración en medio de la pantalla en lugar de una
 /// superficie que tapa todo — que es exactamente lo que pasó la primera vez.
-fn tapar_todo(ventana: &tauri::WebviewWindow) {
+///
+/// Devuelve la geometría de la salida elegida y el tamaño del layout entero. Sin
+/// eso el recorte no puede traducir la selección: la ventana cubre **una**
+/// pantalla y la captura contiene **todas**.
+fn tapar_todo(ventana: &tauri::WebviewWindow) -> Option<(Salida, (i32, i32))> {
     let Ok(gtk) = ventana.gtk_window() else {
         eprintln!("vasak-shot: la ventana no expone su GtkWindow; el selector va a quedar debajo del panel");
-        return;
+        return None;
     };
     gtk.init_layer_shell();
     gtk.set_layer(gtk_layer_shell::Layer::Overlay);
@@ -78,6 +118,18 @@ fn tapar_todo(ventana: &tauri::WebviewWindow) {
     // Con los cuatro anclajes puestos, el compositor le da el tamaño de la
     // salida entera; el margen a cero evita que un tema le reste bordes.
     gtk.set_exclusive_zone(-1);
+
+    let display = gtk.display();
+    let layout = layout_de(&display);
+    let (monitor, salida) = salida_del_puntero(&display)?;
+
+    // **La salida se fija explícitamente.** Sin esto el compositor elige, y no hay
+    // forma de saber cuál eligió: la traducción del recorte quedaría adivinando
+    // sobre qué pantalla se está seleccionando. Es la mitad del bug de los dos
+    // monitores; la otra mitad era no sumar el origen.
+    gtk.set_monitor(&monitor);
+
+    Some((salida, layout))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -151,7 +203,15 @@ pub fn run() {
             // con «GTK may only be used from the main thread»— y `setup` ya está
             // ahí, así que no hace falta despachar nada.
             if let Some(ventana) = app.get_webview_window("main") {
-                tapar_todo(&ventana);
+                match tapar_todo(&ventana) {
+                    Some((salida, layout)) => comandos::recordar_salida(salida, layout),
+                    // Sin geometría se sigue con una sola pantalla: es lo que
+                    // había antes y funciona en ese caso. Peor sería no abrir.
+                    None => eprintln!(
+                        "vasak-shot: no se pudo determinar en qué salida está el puntero; \
+                         con varios monitores el recorte puede salir de la pantalla equivocada"
+                    ),
+                }
                 // Recién ahora: mapearla antes haría fallar el layer-shell.
                 let _ = ventana.show();
             }
