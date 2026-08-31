@@ -65,21 +65,40 @@ fn salida_del_puntero(display: &gtk::gdk::Display) -> Option<(gtk::gdk::Monitor,
     ))
 }
 
-/// El rectángulo que abarcan todas las salidas juntas.
+/// El rectángulo que abarcan todas las salidas juntas, **con su origen**.
 ///
-/// Es el mismo espacio en el que `grim` compone, así que sirve para saber cuántos
-/// píxeles de imagen hay por unidad de layout — ver `captura::escala_de`.
-fn layout_de(display: &gtk::gdk::Display) -> (i32, i32) {
-    let mut ancho = 0;
-    let mut alto = 0;
+/// Es el mismo espacio en el que `grim` compone, así que sirve para dos cosas:
+/// saber cuántos píxeles de imagen hay por unidad de layout —ver
+/// `captura::escala_de`— y saber desde dónde compone.
+///
+/// El origen importa y no siempre es (0, 0): un monitor puesto a la izquierda o
+/// arriba del primario tiene coordenadas negativas, y el píxel (0, 0) de la
+/// imagen es la esquina mínima del rectángulo, no el cero del layout. Quedarse
+/// sólo con los máximos —lo que hacía esta función— daba un ancho equivocado y
+/// un desplazamiento equivocado en cuanto había una salida en negativo.
+fn layout_de(display: &gtk::gdk::Display) -> Salida {
+    let mut min_x = i32::MAX;
+    let mut min_y = i32::MAX;
+    let mut max_x = i32::MIN;
+    let mut max_y = i32::MIN;
+
     for i in 0..display.n_monitors() {
         if let Some(m) = display.monitor(i) {
             let g = m.geometry();
-            ancho = ancho.max(g.x() + g.width());
-            alto = alto.max(g.y() + g.height());
+            min_x = min_x.min(g.x());
+            min_y = min_y.min(g.y());
+            max_x = max_x.max(g.x() + g.width());
+            max_y = max_y.max(g.y() + g.height());
         }
     }
-    (ancho, alto)
+
+    // Sin ninguna salida no hay rectángulo que devolver, y un cero es más honesto
+    // que los centinelas: `escala_de` lo trata como «no sé» y responde escala uno.
+    if min_x > max_x || min_y > max_y {
+        return Salida { x: 0, y: 0, ancho: 0, alto: 0 };
+    }
+
+    Salida { x: min_x, y: min_y, ancho: max_x - min_x, alto: max_y - min_y }
 }
 
 /// Deja la ventana del selector tapando una salida, panel incluido, y dice cuál.
@@ -99,7 +118,7 @@ fn layout_de(display: &gtk::gdk::Display) -> (i32, i32) {
 /// Devuelve la geometría de la salida elegida y el tamaño del layout entero. Sin
 /// eso el recorte no puede traducir la selección: la ventana cubre **una**
 /// pantalla y la captura contiene **todas**.
-fn tapar_todo(ventana: &tauri::WebviewWindow) -> Option<(Salida, (i32, i32))> {
+fn tapar_todo(ventana: &tauri::WebviewWindow) -> Option<(Salida, Salida)> {
     let Ok(gtk) = ventana.gtk_window() else {
         eprintln!("vasak-shot: la ventana no expone su GtkWindow; el selector va a quedar debajo del panel");
         return None;

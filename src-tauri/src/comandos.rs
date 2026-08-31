@@ -23,8 +23,9 @@ fn pendiente() -> &'static Mutex<Option<captura::Captura>> {
 #[derive(Debug, Clone, Copy)]
 struct Geometria {
     salida: Salida,
-    /// El rectángulo que abarcan todas las salidas, en unidades del layout.
-    layout: (i32, i32),
+    /// El rectángulo que abarcan todas las salidas, **con su origen**: `grim`
+    /// compone desde ahí, y no siempre es (0, 0).
+    layout: Salida,
 }
 
 /// La geometría del selector, anotada desde `setup` cuando ya existe la ventana.
@@ -34,7 +35,7 @@ fn geometria() -> &'static Mutex<Option<Geometria>> {
 }
 
 /// Anota la salida que el selector tapó y el tamaño del layout entero.
-pub fn recordar_salida(salida: Salida, layout: (i32, i32)) {
+pub fn recordar_salida(salida: Salida, layout: Salida) {
     if let Ok(mut guardia) = geometria().lock() {
         *guardia = Some(Geometria { salida, layout });
     }
@@ -58,11 +59,15 @@ pub struct Lienzo {
     /// El tamaño de la captura **entera**, con todas las salidas.
     pub ancho: u32,
     pub alto: u32,
-    /// La salida que el selector está tapando, en unidades del layout.
+    /// La salida que el selector está tapando, **relativa al origen del layout**.
     ///
     /// El frontend la necesita para mostrar **su pedazo** de la captura. Sin esto
     /// estiraba la composición completa dentro de una pantalla, y con dos
     /// monitores apilados eso significa verlos los dos achatados a la mitad.
+    ///
+    /// Relativa y no absoluta a propósito: el origen del layout puede ser
+    /// negativo, y así el frontend usa estos números tal cual para desplazar el
+    /// fondo, sin tener que saber nada del layout.
     pub salida: Salida,
     /// Cuántos píxeles de la captura hay por unidad del layout, por eje.
     pub escala_x: f64,
@@ -98,7 +103,11 @@ pub fn lienzo() -> Result<Lienzo, String> {
 fn salida_y_escala(ancho: u32, alto: u32) -> (Salida, (f64, f64)) {
     let anotada = geometria().lock().ok().and_then(|g| *g);
     match anotada {
-        Some(g) => (g.salida, captura::escala_de((ancho, alto), g.layout)),
+        // Relativa al origen del layout: es el espacio en el que `grim` compone.
+        Some(g) => (
+            g.salida.relativa_a(g.layout),
+            captura::escala_de((ancho, alto), g.layout),
+        ),
         None => (Salida::entera(ancho as i32, alto as i32), (1.0, 1.0)),
     }
 }

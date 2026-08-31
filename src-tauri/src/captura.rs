@@ -100,15 +100,26 @@ impl Region {
     ///
     /// La escala se aplica después de sumar, no antes: el origen de la salida está
     /// en unidades del layout igual que la selección.
+    ///
+    /// `salida` tiene que venir **relativa al origen del layout** —ver
+    /// `Salida::relativa_a`—, porque es en ese espacio donde `grim` compone.
+    ///
+    /// El tamaño sale de restar los dos bordes ya transformados, no de escalar el
+    /// ancho por su cuenta. Con escala fraccionaria las dos cuentas no dan lo
+    /// mismo: con escala 1.25, la selección `[2, 4)` tiene su borde derecho en
+    /// `6 - 3 = 3`, mientras que redondear el ancho aparte da `round(2 * 1.25) =
+    /// 3`… y para `[2, 3)` daría un píxel de más. El borde manda, porque es lo
+    /// que decide qué píxeles entran.
     pub fn en_la_captura(self, salida: Salida, escala: (f64, f64)) -> Self {
         let n = self.normalizada();
         let (ex, ey) = escala;
-        Self {
-            x: (f64::from(salida.x + n.x) * ex).round() as i32,
-            y: (f64::from(salida.y + n.y) * ey).round() as i32,
-            ancho: (f64::from(n.ancho) * ex).round() as i32,
-            alto: (f64::from(n.alto) * ey).round() as i32,
-        }
+
+        let x0 = (f64::from(salida.x + n.x) * ex).round() as i32;
+        let y0 = (f64::from(salida.y + n.y) * ey).round() as i32;
+        let x1 = (f64::from(salida.x + n.x + n.ancho) * ex).round() as i32;
+        let y1 = (f64::from(salida.y + n.y + n.alto) * ey).round() as i32;
+
+        Self { x: x0, y: y0, ancho: x1 - x0, alto: y1 - y0 }
     }
 
     /// Recorta la región a lo que de verdad existe en la imagen.
@@ -158,6 +169,17 @@ impl Salida {
     pub fn entera(ancho: i32, alto: i32) -> Self {
         Self { x: 0, y: 0, ancho, alto }
     }
+
+    /// Esta salida con el origen del layout restado.
+    ///
+    /// Hace falta porque **el origen del layout no siempre es (0, 0)**. Un
+    /// monitor puesto a la izquierda o arriba del primario tiene coordenadas
+    /// negativas, y `grim` compone desde la esquina del rectángulo que abarca
+    /// todo: su píxel (0, 0) es el origen mínimo, no el cero del layout. Sin
+    /// restarlo, una salida en `x = -1920` pediría un recorte en `x` negativo.
+    pub fn relativa_a(self, layout: Salida) -> Self {
+        Self { x: self.x - layout.x, y: self.y - layout.y, ..self }
+    }
 }
 
 /// Cuántos píxeles de la captura hay por cada unidad del layout.
@@ -173,9 +195,9 @@ impl Salida {
 /// Con salidas de escalas distintas `grim` compone a la mayor, así que esta razón
 /// única deja de ser exacta para las de menor escala. Es el caso raro y no lo
 /// cubre esta cuenta; hacerlo bien exige capturar salida por salida con `grim -o`.
-pub fn escala_de(imagen: (u32, u32), layout: (i32, i32)) -> (f64, f64) {
-    let ex = if layout.0 > 0 { imagen.0 as f64 / layout.0 as f64 } else { 1.0 };
-    let ey = if layout.1 > 0 { imagen.1 as f64 / layout.1 as f64 } else { 1.0 };
+pub fn escala_de(imagen: (u32, u32), layout: Salida) -> (f64, f64) {
+    let ex = if layout.ancho > 0 { f64::from(imagen.0) / f64::from(layout.ancho) } else { 1.0 };
+    let ey = if layout.alto > 0 { f64::from(imagen.1) / f64::from(layout.alto) } else { 1.0 };
     (ex, ey)
 }
 
@@ -484,7 +506,7 @@ mod tests {
     fn apilados() -> (Salida, Salida, (f64, f64)) {
         let arriba = Salida { x: 0, y: 0, ancho: 1920, alto: 1080 };
         let abajo = Salida { x: 0, y: 1080, ancho: 1920, alto: 1080 };
-        let escala = escala_de((1920, 2160), (1920, 2160));
+        let escala = escala_de((1920, 2160), Salida::entera(1920, 2160));
         (arriba, abajo, escala)
     }
 
@@ -529,7 +551,7 @@ mod tests {
     fn tambien_funciona_lado_a_lado() {
         // El otro layout habitual. Acá el que se corre es el eje x.
         let derecha = Salida { x: 1920, y: 0, ancho: 1920, alto: 1080 };
-        let escala = escala_de((3840, 1080), (3840, 1080));
+        let escala = escala_de((3840, 1080), Salida::entera(3840, 1080));
         assert_eq!(
             Region { x: 5, y: 5, ancho: 100, alto: 100 }.en_la_captura(derecha, escala),
             Region { x: 1925, y: 5, ancho: 100, alto: 100 }
@@ -541,7 +563,7 @@ mod tests {
         // El caso más común tiene que seguir dando exactamente lo mismo que
         // antes del arreglo: origen en cero y escala uno.
         let sola = Salida::entera(1920, 1080);
-        let escala = escala_de((1920, 1080), (1920, 1080));
+        let escala = escala_de((1920, 1080), Salida::entera(1920, 1080));
         assert_eq!(escala, (1.0, 1.0));
         let r = Region { x: 33, y: 77, ancho: 200, alto: 150 };
         assert_eq!(r.en_la_captura(sola, escala), r);
@@ -552,7 +574,7 @@ mod tests {
         // Escala 2: el layout mide 1920x1080 en unidades lógicas y la captura
         // sale de 3840x2160. Sin multiplicar, el recorte saldría del cuadrante
         // de arriba a la izquierda y a la mitad de tamaño.
-        let escala = escala_de((3840, 2160), (1920, 1080));
+        let escala = escala_de((3840, 2160), Salida::entera(1920, 1080));
         assert_eq!(escala, (2.0, 2.0));
         assert_eq!(
             Region { x: 100, y: 50, ancho: 300, alto: 200 }
@@ -578,7 +600,68 @@ mod tests {
     fn un_layout_de_cero_no_divide_por_cero() {
         // Si la consulta a GDK devolviera un layout vacío, la escala tiene que
         // salir uno y no NaN: con NaN el recorte pide coordenadas inventadas.
-        assert_eq!(escala_de((1920, 1080), (0, 0)), (1.0, 1.0));
+        assert_eq!(escala_de((1920, 1080), Salida::entera(0, 0)), (1.0, 1.0));
+    }
+
+    #[test]
+    fn una_salida_a_la_izquierda_del_origen() {
+        // El layout no siempre empieza en (0, 0): un monitor a la izquierda del
+        // primario tiene x negativo, y `grim` compone desde la esquina mínima.
+        // Quedándose sólo con los máximos, el ancho salía mal y el recorte pedía
+        // coordenadas negativas.
+        let layout = Salida { x: -1920, y: 0, ancho: 3840, alto: 1080 };
+        let izquierda = Salida { x: -1920, y: 0, ancho: 1920, alto: 1080 };
+        let primaria = Salida { x: 0, y: 0, ancho: 1920, alto: 1080 };
+        let escala = escala_de((3840, 1080), layout);
+        assert_eq!(escala, (1.0, 1.0));
+
+        let seleccion = Region { x: 10, y: 20, ancho: 100, alto: 50 };
+
+        // La de la izquierda es la que aporta el arranque de la imagen.
+        assert_eq!(
+            seleccion.en_la_captura(izquierda.relativa_a(layout), escala),
+            Region { x: 10, y: 20, ancho: 100, alto: 50 }
+        );
+        // Y la primaria queda desplazada 1920, no en cero.
+        assert_eq!(
+            seleccion.en_la_captura(primaria.relativa_a(layout), escala),
+            Region { x: 1930, y: 20, ancho: 100, alto: 50 }
+        );
+    }
+
+    #[test]
+    fn una_salida_arriba_del_origen() {
+        // El mismo caso en vertical, que es el layout de la máquina del reporte
+        // pero con el monitor externo puesto arriba en coordenadas negativas.
+        let layout = Salida { x: 0, y: -1080, ancho: 1920, alto: 2160 };
+        let arriba = Salida { x: 0, y: -1080, ancho: 1920, alto: 1080 };
+        let abajo = Salida { x: 0, y: 0, ancho: 1920, alto: 1080 };
+        let escala = escala_de((1920, 2160), layout);
+        let r = Region { x: 5, y: 5, ancho: 40, alto: 40 };
+
+        assert_eq!(r.en_la_captura(arriba.relativa_a(layout), escala).y, 5);
+        assert_eq!(r.en_la_captura(abajo.relativa_a(layout), escala).y, 1085);
+    }
+
+    #[test]
+    fn con_escala_fraccionaria_manda_el_borde() {
+        // Escala 1.25, que es la de una portátil común. El tamaño sale de restar
+        // los dos bordes ya transformados: escalando el ancho por su cuenta,
+        // `[2, 4)` daba un borde derecho distinto del que le corresponde.
+        let escala = escala_de((2560, 1600), Salida::entera(2048, 1280));
+        assert_eq!(escala, (1.25, 1.25));
+
+        let sola = Salida::entera(2048, 1280);
+        let r = Region { x: 2, y: 2, ancho: 2, alto: 2 }.en_la_captura(sola, escala);
+
+        // Bordes: round(2*1.25)=3 y round(4*1.25)=5, así que el ancho es 2.
+        assert_eq!(r, Region { x: 3, y: 3, ancho: 2, alto: 2 });
+
+        // Y el borde derecho del recorte cae donde cae el borde transformado, que
+        // es la propiedad que importa: dos regiones pegadas siguen pegadas.
+        let a = Region { x: 0, y: 0, ancho: 3, alto: 1 }.en_la_captura(sola, escala);
+        let b = Region { x: 3, y: 0, ancho: 3, alto: 1 }.en_la_captura(sola, escala);
+        assert_eq!(a.x + a.ancho, b.x, "quedó un hueco o un solape entre dos regiones pegadas");
     }
 
     #[test]
