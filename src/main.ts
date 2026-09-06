@@ -2,7 +2,6 @@ import { useConfigStore } from '@vasakgroup/plugin-config-manager';
 import { getIconSource } from '@vasakgroup/plugin-vicons';
 import { setupContextMenu } from '@vasakgroup/plugin-vsk-contextual-menu';
 import I18n from '@vasakgroup/tauri-plugin-i18n';
-import type { Store } from 'pinia';
 import { createPinia } from 'pinia';
 import { createApp } from 'vue';
 import App from '@/App.vue';
@@ -107,7 +106,7 @@ await Promise.race([
 			.catch((error) => {
 				console.error('No se pudieron cargar las traducciones', error);
 			}),
-		(useConfigStore() as Store<'config', { config: unknown; loadConfig: () => Promise<void> }>)
+		(useConfigStore())
 			.loadConfig()
 			.catch((error: unknown) => {
 				console.error('No se pudo cargar la configuración', error);
