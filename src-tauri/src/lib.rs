@@ -98,7 +98,25 @@ fn cursor_de_wayfire() -> Option<(i32, i32)> {
 fn cursor_de_wayfire_en(ruta: impl AsRef<std::path::Path>) -> Option<(i32, i32)> {
     use std::io::{Read, Write};
 
+    /// Cuánto se espera a cada operación del socket.
+    ///
+    /// Sin esto, un compositor que deja de contestar cuelga la captura para
+    /// siempre: `read_exact` bloquea, y el camino de GDK —que es el que tenía
+    /// que salvar el caso— no se llega a ejecutar nunca. Un segundo es
+    /// larguísimo para una consulta local; lo que importa es que exista.
+    const ESPERA: std::time::Duration = std::time::Duration::from_secs(1);
+
+    /// Techo del cuerpo de la respuesta.
+    ///
+    /// El largo lo dice el otro extremo, y `WAYFIRE_SOCKET` es una variable de
+    /// entorno: quien la controle puede anunciar un marco de gigabytes y hacer
+    /// que esto reserve memoria hasta morirse, en lugar de caer a GDK. La
+    /// respuesta real son unas decenas de bytes.
+    const TECHO: u32 = 64 * 1024;
+
     let mut sock = std::os::unix::net::UnixStream::connect(ruta).ok()?;
+    sock.set_read_timeout(Some(ESPERA)).ok()?;
+    sock.set_write_timeout(Some(ESPERA)).ok()?;
 
     let pedido = br#"{"method":"window-rules/get_cursor_position","data":{}}"#;
     sock.write_all(&(pedido.len() as u32).to_ne_bytes()).ok()?;
@@ -106,15 +124,23 @@ fn cursor_de_wayfire_en(ruta: impl AsRef<std::path::Path>) -> Option<(i32, i32)>
 
     let mut largo = [0u8; 4];
     sock.read_exact(&mut largo).ok()?;
-    let mut cuerpo = vec![0u8; u32::from_ne_bytes(largo) as usize];
+    let largo = u32::from_ne_bytes(largo);
+    if largo > TECHO {
+        return None;
+    }
+
+    let mut cuerpo = vec![0u8; largo as usize];
     sock.read_exact(&mut cuerpo).ok()?;
 
     let respuesta: serde_json::Value = serde_json::from_slice(&cuerpo).ok()?;
     let pos = respuesta.get("pos")?;
-    // Vienen como flotantes: el compositor las lleva en subpíxeles.
+    // Vienen como flotantes: el compositor las lleva en subpíxeles. `floor` y no
+    // `as i32` a secas, que trunca hacia cero: con un monitor a la izquierda del
+    // primario las coordenadas son negativas, y `-0.5` se volvería `0` — o sea
+    // el monitor del otro lado del borde.
     Some((
-        pos.get("x")?.as_f64()? as i32,
-        pos.get("y")?.as_f64()? as i32,
+        pos.get("x")?.as_f64()?.floor() as i32,
+        pos.get("y")?.as_f64()?.floor() as i32,
     ))
 }
 
@@ -326,6 +352,104 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Un wayfire de mentira, para ejercitar el protocolo en cualquier máquina.
+    ///
+    /// Sirve una sola respuesta con el enmarcado real —cuatro bytes de largo y
+    /// después el JSON— y devuelve la ruta del socket. Sin esto, el camino que
+    /// arma el pedido y parsea la respuesta no lo recorría nadie en CI: la única
+    /// prueba que lo tocaba se salteaba sola donde no hay sesión.
+    fn wayfire_de_mentira(
+        cuerpo: &'static str,
+    ) -> (std::path::PathBuf, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+
+        let ruta = std::env::temp_dir().join(format!(
+            "vasak-shot-prueba-{}-{:?}.sock",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_file(&ruta);
+        let escucha = std::os::unix::net::UnixListener::bind(&ruta).expect("socket de prueba");
+
+        let hilo = std::thread::spawn(move || {
+            if let Ok((mut sock, _)) = escucha.accept() {
+                // Se lee el pedido entero antes de contestar: si no, el cliente
+                // puede ver un socket cerrado a mitad de su `write_all`.
+                let mut largo = [0u8; 4];
+                if sock.read_exact(&mut largo).is_ok() {
+                    let mut pedido = vec![0u8; u32::from_ne_bytes(largo) as usize];
+                    let _ = sock.read_exact(&mut pedido);
+                }
+                let _ = sock.write_all(&(cuerpo.len() as u32).to_ne_bytes());
+                let _ = sock.write_all(cuerpo.as_bytes());
+            }
+        });
+
+        (ruta, hilo)
+    }
+
+    /// El enmarcado y el parseo, contra un servidor de mentira.
+    #[test]
+    fn la_respuesta_enmarcada_se_lee_entera() {
+        let (ruta, hilo) = wayfire_de_mentira(r#"{"result":"ok","pos":{"x":828.34,"y":2109.18}}"#);
+        let pos = cursor_de_wayfire_en(&ruta);
+        hilo.join().unwrap();
+        let _ = std::fs::remove_file(&ruta);
+
+        assert_eq!(pos, Some((828, 2109)));
+    }
+
+    /// Las negativas se redondean hacia abajo, no hacia cero.
+    ///
+    /// `as i32` trunca hacia cero, así que `-0.5` daría `0`: con un monitor a la
+    /// izquierda del primario eso elige el del otro lado del borde, que es el
+    /// mismo error que este arreglo vino a corregir.
+    #[test]
+    fn una_coordenada_negativa_no_se_va_al_otro_monitor() {
+        let (ruta, hilo) = wayfire_de_mentira(r#"{"result":"ok","pos":{"x":-0.5,"y":-1920.5}}"#);
+        let pos = cursor_de_wayfire_en(&ruta);
+        hilo.join().unwrap();
+        let _ = std::fs::remove_file(&ruta);
+
+        assert_eq!(pos, Some((-1, -1921)));
+    }
+
+    /// Un marco enorme se rechaza en vez de reservar la memoria que anuncia.
+    ///
+    /// El largo lo dice el otro extremo y la ruta sale de una variable de
+    /// entorno: sin techo, quien la controle hace que esto intente reservar
+    /// gigabytes en lugar de caer a GDK.
+    #[test]
+    fn un_marco_gigante_no_se_reserva() {
+        use std::io::{Read, Write};
+
+        let ruta =
+            std::env::temp_dir().join(format!("vasak-shot-gigante-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&ruta);
+        let escucha = std::os::unix::net::UnixListener::bind(&ruta).expect("socket de prueba");
+
+        let hilo = std::thread::spawn(move || {
+            if let Ok((mut sock, _)) = escucha.accept() {
+                let mut largo = [0u8; 4];
+                if sock.read_exact(&mut largo).is_ok() {
+                    let mut pedido = vec![0u8; u32::from_ne_bytes(largo) as usize];
+                    let _ = sock.read_exact(&mut pedido);
+                }
+                // Anuncia casi cuatro gigabytes y no manda nada.
+                let _ = sock.write_all(&u32::MAX.to_ne_bytes());
+            }
+        });
+
+        let pos = cursor_de_wayfire_en(&ruta);
+        hilo.join().unwrap();
+        let _ = std::fs::remove_file(&ruta);
+
+        assert_eq!(
+            pos, None,
+            "un largo imposible tiene que caer al camino de GDK"
+        );
+    }
 
     /// Sin compositor al que preguntarle, se cae a GDK en vez de romper.
     ///
