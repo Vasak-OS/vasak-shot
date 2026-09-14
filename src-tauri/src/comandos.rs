@@ -176,7 +176,8 @@ pub fn copiar(region: Region) -> Result<(), String> {
             .clone()
     };
 
-    let temporal = std::env::temp_dir().join(format!("vasak-shot-copia-{}.png", std::process::id()));
+    let temporal =
+        std::env::temp_dir().join(format!("vasak-shot-copia-{}.png", std::process::id()));
     captura::recortar(&origen, region, &temporal)?;
     let resultado = captura::copiar_al_portapapeles(&temporal);
     let _ = std::fs::remove_file(&temporal);

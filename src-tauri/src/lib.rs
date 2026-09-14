@@ -38,10 +38,7 @@ pub enum Modo {
 /// abra el selector o guarde directo, y confundirlos hace que la herramienta
 /// haga lo contrario de lo que se le pidió.
 pub fn modo_de(argumentos: &[String]) -> Modo {
-    if argumentos
-        .iter()
-        .any(|a| a == "--pantalla" || a == "-p")
-    {
+    if argumentos.iter().any(|a| a == "--pantalla" || a == "-p") {
         Modo::PantallaCompleta
     } else {
         Modo::Selector
@@ -115,7 +112,10 @@ fn cursor_de_wayfire_en(ruta: impl AsRef<std::path::Path>) -> Option<(i32, i32)>
     let respuesta: serde_json::Value = serde_json::from_slice(&cuerpo).ok()?;
     let pos = respuesta.get("pos")?;
     // Vienen como flotantes: el compositor las lleva en subpíxeles.
-    Some((pos.get("x")?.as_f64()? as i32, pos.get("y")?.as_f64()? as i32))
+    Some((
+        pos.get("x")?.as_f64()? as i32,
+        pos.get("y")?.as_f64()? as i32,
+    ))
 }
 
 /// La salida donde está el puntero, y el rectángulo que ocupa en el layout.
@@ -129,7 +129,12 @@ fn salida_del_puntero(display: &gtk::gdk::Display) -> Option<(gtk::gdk::Monitor,
     let g = monitor.geometry();
     Some((
         monitor,
-        Salida { x: g.x(), y: g.y(), ancho: g.width(), alto: g.height() },
+        Salida {
+            x: g.x(),
+            y: g.y(),
+            ancho: g.width(),
+            alto: g.height(),
+        },
     ))
 }
 
@@ -163,10 +168,20 @@ fn layout_de(display: &gtk::gdk::Display) -> Salida {
     // Sin ninguna salida no hay rectángulo que devolver, y un cero es más honesto
     // que los centinelas: `escala_de` lo trata como «no sé» y responde escala uno.
     if min_x > max_x || min_y > max_y {
-        return Salida { x: 0, y: 0, ancho: 0, alto: 0 };
+        return Salida {
+            x: 0,
+            y: 0,
+            ancho: 0,
+            alto: 0,
+        };
     }
 
-    Salida { x: min_x, y: min_y, ancho: max_x - min_x, alto: max_y - min_y }
+    Salida {
+        x: min_x,
+        y: min_y,
+        ancho: max_x - min_x,
+        alto: max_y - min_y,
+    }
 }
 
 /// Deja la ventana del selector tapando una salida, panel incluido, y dice cuál.
