@@ -48,15 +48,83 @@ pub fn modo_de(argumentos: &[String]) -> Modo {
     }
 }
 
+/// Dónde está el puntero, preguntándoselo al compositor.
+///
+/// # Por qué no alcanza con GDK
+///
+/// `GdkDevice::position()` **no funciona en Wayland**: el protocolo no deja que
+/// un cliente pregunte dónde está el puntero fuera de sus propias superficies,
+/// y GDK devuelve `(0, 0)` sin avisar de nada. Como `(0, 0)` cae siempre en la
+/// salida que está en el origen del layout, el selector aparecía siempre en la
+/// misma pantalla por más que el ratón estuviera en la otra.
+///
+/// Comprobado en una sesión de dos monitores apilados: el cursor en
+/// `y = 2109` —la pantalla de abajo, que empieza en 1080— y GDK contestando
+/// `(0, 0)`, o sea la de arriba.
+///
+/// # De dónde sale entonces
+///
+/// De wayfire, por su socket de IPC: `window-rules/get_cursor_position`
+/// devuelve la posición en coordenadas del layout, que es el mismo espacio en
+/// el que GDK ubica las salidas.
+///
+/// Si no hay socket —otro compositor, X11, una prueba— se cae a GDK, que ahí sí
+/// contesta. Preguntar primero y caer después mantiene andando lo que ya
+/// andaba en lugar de cambiar una limitación por otra.
+fn posicion_del_puntero(display: &gtk::gdk::Display) -> Option<(i32, i32)> {
+    if let Some(pos) = cursor_de_wayfire() {
+        return Some(pos);
+    }
+
+    let asiento = display.default_seat()?;
+    let puntero = asiento.pointer()?;
+    let (_, x, y) = puntero.position();
+    Some((x, y))
+}
+
+/// El cursor según wayfire, o `None` si no se lo puede preguntar.
+///
+/// El protocolo es el de su IPC: cuatro bytes con el largo, después el JSON.
+/// Ningún error se informa hacia arriba a propósito —no hay socket, no contesta,
+/// contesta otra cosa—: todos significan lo mismo para quien llama, que es
+/// «preguntale a GDK».
+fn cursor_de_wayfire() -> Option<(i32, i32)> {
+    cursor_de_wayfire_en(std::env::var_os("WAYFIRE_SOCKET")?)
+}
+
+/// Lo mismo, contra un socket concreto.
+///
+/// La ruta entra por argumento y no se lee acá para poder probarlo sin tocar el
+/// entorno del proceso: `cargo test` corre en hilos que lo comparten, así que
+/// una prueba que lo modifica le cambia el mundo a las otras — y la que
+/// necesitaba el socket se salteaba sola.
+fn cursor_de_wayfire_en(ruta: impl AsRef<std::path::Path>) -> Option<(i32, i32)> {
+    use std::io::{Read, Write};
+
+    let mut sock = std::os::unix::net::UnixStream::connect(ruta).ok()?;
+
+    let pedido = br#"{"method":"window-rules/get_cursor_position","data":{}}"#;
+    sock.write_all(&(pedido.len() as u32).to_ne_bytes()).ok()?;
+    sock.write_all(pedido).ok()?;
+
+    let mut largo = [0u8; 4];
+    sock.read_exact(&mut largo).ok()?;
+    let mut cuerpo = vec![0u8; u32::from_ne_bytes(largo) as usize];
+    sock.read_exact(&mut cuerpo).ok()?;
+
+    let respuesta: serde_json::Value = serde_json::from_slice(&cuerpo).ok()?;
+    let pos = respuesta.get("pos")?;
+    // Vienen como flotantes: el compositor las lleva en subpíxeles.
+    Some((pos.get("x")?.as_f64()? as i32, pos.get("y")?.as_f64()? as i32))
+}
+
 /// La salida donde está el puntero, y el rectángulo que ocupa en el layout.
 ///
 /// El puntero y no la salida primaria: quien aprieta la tecla de captura está
 /// mirando la pantalla donde tiene el ratón, y esperar que el selector aparezca
 /// en la otra es de las cosas que hacen sentir que la herramienta está rota.
 fn salida_del_puntero(display: &gtk::gdk::Display) -> Option<(gtk::gdk::Monitor, Salida)> {
-    let asiento = display.default_seat()?;
-    let puntero = asiento.pointer()?;
-    let (_, x, y) = puntero.position();
+    let (x, y) = posicion_del_puntero(display)?;
     let monitor = display.monitor_at_point(x, y)?;
     let g = monitor.geometry();
     Some((
@@ -243,6 +311,36 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Sin compositor al que preguntarle, se cae a GDK en vez de romper.
+    ///
+    /// Es el camino de X11, de otro compositor y de una máquina de integración.
+    /// Que devuelva `None` es lo que deja que `posicion_del_puntero` siga.
+    #[test]
+    fn sin_socket_no_hay_cursor_por_ipc() {
+        assert_eq!(cursor_de_wayfire_en("/no/existe/este/socket"), None);
+    }
+
+    /// Con wayfire andando, la posición sale de él y no es `(0, 0)` de mentira.
+    ///
+    /// El bug era ése: en Wayland `GdkDevice::position()` contesta `(0, 0)` sin
+    /// avisar, y `(0, 0)` cae siempre en la salida del origen del layout, así
+    /// que el selector aparecía siempre en la misma pantalla.
+    ///
+    /// Se saltea sin socket —una máquina de integración no tiene sesión— porque
+    /// lo único que puede comprobar acá es que el compositor conteste.
+    #[test]
+    fn con_wayfire_la_posicion_sale_del_compositor() {
+        if std::env::var_os("WAYFIRE_SOCKET").is_none() {
+            return;
+        }
+
+        let ruta = std::env::var_os("WAYFIRE_SOCKET").expect("recién se comprobó");
+        let (x, y) = cursor_de_wayfire_en(ruta).expect("wayfire tiene que contestar la posición");
+        // Nada de rangos inventados: sólo que sea una coordenada de layout
+        // plausible. Lo que importa es que venga del compositor.
+        assert!(x > i32::MIN && y > i32::MIN, "({x}, {y})");
+    }
 
     #[test]
     fn sin_argumentos_se_abre_el_selector() {
