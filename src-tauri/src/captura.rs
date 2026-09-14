@@ -119,7 +119,12 @@ impl Region {
         let x1 = (f64::from(salida.x + n.x + n.ancho) * ex).round() as i32;
         let y1 = (f64::from(salida.y + n.y + n.alto) * ey).round() as i32;
 
-        Self { x: x0, y: y0, ancho: x1 - x0, alto: y1 - y0 }
+        Self {
+            x: x0,
+            y: y0,
+            ancho: x1 - x0,
+            alto: y1 - y0,
+        }
     }
 
     /// Recorta la región a lo que de verdad existe en la imagen.
@@ -167,7 +172,12 @@ pub struct Salida {
 impl Salida {
     /// La salida que cubre todo el layout, para cuando hay una sola pantalla.
     pub fn entera(ancho: i32, alto: i32) -> Self {
-        Self { x: 0, y: 0, ancho, alto }
+        Self {
+            x: 0,
+            y: 0,
+            ancho,
+            alto,
+        }
     }
 
     /// Esta salida con el origen del layout restado.
@@ -178,7 +188,11 @@ impl Salida {
     /// todo: su píxel (0, 0) es el origen mínimo, no el cero del layout. Sin
     /// restarlo, una salida en `x = -1920` pediría un recorte en `x` negativo.
     pub fn relativa_a(self, layout: Salida) -> Self {
-        Self { x: self.x - layout.x, y: self.y - layout.y, ..self }
+        Self {
+            x: self.x - layout.x,
+            y: self.y - layout.y,
+            ..self
+        }
     }
 }
 
@@ -196,8 +210,16 @@ impl Salida {
 /// única deja de ser exacta para las de menor escala. Es el caso raro y no lo
 /// cubre esta cuenta; hacerlo bien exige capturar salida por salida con `grim -o`.
 pub fn escala_de(imagen: (u32, u32), layout: Salida) -> (f64, f64) {
-    let ex = if layout.ancho > 0 { f64::from(imagen.0) / f64::from(layout.ancho) } else { 1.0 };
-    let ey = if layout.alto > 0 { f64::from(imagen.1) / f64::from(layout.alto) } else { 1.0 };
+    let ex = if layout.ancho > 0 {
+        f64::from(imagen.0) / f64::from(layout.ancho)
+    } else {
+        1.0
+    };
+    let ey = if layout.alto > 0 {
+        f64::from(imagen.1) / f64::from(layout.alto)
+    } else {
+        1.0
+    };
     (ex, ey)
 }
 
@@ -229,7 +251,14 @@ pub fn dimensiones_png(bytes: &[u8]) -> Option<(u32, u32)> {
 /// Con segundos, porque dos capturas seguidas dentro del mismo minuto son lo
 /// normal —se prueba un encuadre, se corrige, se vuelve a sacar— y sin ellos la
 /// segunda pisaría a la primera.
-pub fn nombre_de_archivo(anio: i32, mes: u32, dia: u32, hora: u32, minuto: u32, segundo: u32) -> String {
+pub fn nombre_de_archivo(
+    anio: i32,
+    mes: u32,
+    dia: u32,
+    hora: u32,
+    minuto: u32,
+    segundo: u32,
+) -> String {
     format!("Captura {anio:04}-{mes:02}-{dia:02} {hora:02}.{minuto:02}.{segundo:02}.png")
 }
 
@@ -264,8 +293,8 @@ pub fn capturar(destino: &Path) -> Result<Captura, String> {
 /// Los primeros bytes de un archivo, los que alcanzan para el `IHDR`.
 fn leer_cabecera(ruta: &Path) -> Result<Vec<u8>, String> {
     use std::io::Read;
-    let mut archivo =
-        std::fs::File::open(ruta).map_err(|e| format!("no se pudo abrir {}: {e}", ruta.display()))?;
+    let mut archivo = std::fs::File::open(ruta)
+        .map_err(|e| format!("no se pudo abrir {}: {e}", ruta.display()))?;
     let mut cabecera = [0u8; 24];
     let leidos = archivo
         .read(&mut cabecera)
@@ -282,8 +311,8 @@ fn leer_cabecera(ruta: &Path) -> Result<Vec<u8>, String> {
 /// uno posterior— y porque la geometría de `grim` está en coordenadas del layout
 /// de salidas, que no son las de la pantalla.
 pub fn recortar(origen: &Path, region: Region, destino: &Path) -> Result<(), String> {
-    let imagen = image::open(origen)
-        .map_err(|e| format!("no se pudo leer {}: {e}", origen.display()))?;
+    let imagen =
+        image::open(origen).map_err(|e| format!("no se pudo leer {}: {e}", origen.display()))?;
 
     let (ancho, alto) = (imagen.width(), imagen.height());
     let region = region
@@ -319,8 +348,8 @@ pub fn copiar_al_portapapeles(ruta: &Path) -> Result<(), String> {
     use std::io::Write;
     use std::process::{Command, Stdio};
 
-    let bytes = std::fs::read(ruta)
-        .map_err(|e| format!("no se pudo leer {}: {e}", ruta.display()))?;
+    let bytes =
+        std::fs::read(ruta).map_err(|e| format!("no se pudo leer {}: {e}", ruta.display()))?;
 
     let mut hijo = Command::new("wl-copy")
         .args(["--type", "image/png"])
@@ -366,12 +395,37 @@ mod tests {
         // Las cuatro formas de seleccionar el mismo rectángulo: desde cada
         // esquina. Sin normalizar, tres de las cuatro llegan con medidas
         // negativas al recorte.
-        let esperada = Region { x: 10, y: 20, ancho: 30, alto: 40 };
+        let esperada = Region {
+            x: 10,
+            y: 20,
+            ancho: 30,
+            alto: 40,
+        };
 
-        let desde_arriba_izquierda = Region { x: 10, y: 20, ancho: 30, alto: 40 };
-        let desde_arriba_derecha = Region { x: 40, y: 20, ancho: -30, alto: 40 };
-        let desde_abajo_izquierda = Region { x: 10, y: 60, ancho: 30, alto: -40 };
-        let desde_abajo_derecha = Region { x: 40, y: 60, ancho: -30, alto: -40 };
+        let desde_arriba_izquierda = Region {
+            x: 10,
+            y: 20,
+            ancho: 30,
+            alto: 40,
+        };
+        let desde_arriba_derecha = Region {
+            x: 40,
+            y: 20,
+            ancho: -30,
+            alto: 40,
+        };
+        let desde_abajo_izquierda = Region {
+            x: 10,
+            y: 60,
+            ancho: 30,
+            alto: -40,
+        };
+        let desde_abajo_derecha = Region {
+            x: 40,
+            y: 60,
+            ancho: -30,
+            alto: -40,
+        };
 
         for region in [
             desde_arriba_izquierda,
@@ -379,26 +433,50 @@ mod tests {
             desde_abajo_izquierda,
             desde_abajo_derecha,
         ] {
-            assert_eq!(region.normalizada(), esperada, "arrastrando desde {region:?}");
+            assert_eq!(
+                region.normalizada(),
+                esperada,
+                "arrastrando desde {region:?}"
+            );
         }
     }
 
     #[test]
     fn una_seleccion_que_se_pasa_del_borde_se_recorta() {
         // El puntero llega más allá de la imagen; la imagen no.
-        let region = Region { x: 1800, y: 1000, ancho: 400, alto: 400 };
+        let region = Region {
+            x: 1800,
+            y: 1000,
+            ancho: 400,
+            alto: 400,
+        };
         assert_eq!(
             region.recortada_a(1920, 1080),
-            Some(Region { x: 1800, y: 1000, ancho: 120, alto: 80 })
+            Some(Region {
+                x: 1800,
+                y: 1000,
+                ancho: 120,
+                alto: 80
+            })
         );
     }
 
     #[test]
     fn una_seleccion_que_empieza_afuera_tambien() {
-        let region = Region { x: -50, y: -50, ancho: 200, alto: 200 };
+        let region = Region {
+            x: -50,
+            y: -50,
+            ancho: 200,
+            alto: 200,
+        };
         assert_eq!(
             region.recortada_a(1920, 1080),
-            Some(Region { x: 0, y: 0, ancho: 150, alto: 150 })
+            Some(Region {
+                x: 0,
+                y: 0,
+                ancho: 150,
+                alto: 150
+            })
         );
     }
 
@@ -407,15 +485,56 @@ mod tests {
         // Un clic sin arrastrar, y una selección enteramente fuera de la imagen.
         // Devolver una región de cero píxeles haría que el recorte paniqueara o
         // guardara un archivo vacío.
-        assert_eq!(Region { x: 10, y: 10, ancho: 0, alto: 0 }.recortada_a(1920, 1080), None);
-        assert_eq!(Region { x: 10, y: 10, ancho: 50, alto: 0 }.recortada_a(1920, 1080), None);
-        assert_eq!(Region { x: 5000, y: 5000, ancho: 10, alto: 10 }.recortada_a(1920, 1080), None);
-        assert_eq!(Region { x: -100, y: -100, ancho: 50, alto: 50 }.recortada_a(1920, 1080), None);
+        assert_eq!(
+            Region {
+                x: 10,
+                y: 10,
+                ancho: 0,
+                alto: 0
+            }
+            .recortada_a(1920, 1080),
+            None
+        );
+        assert_eq!(
+            Region {
+                x: 10,
+                y: 10,
+                ancho: 50,
+                alto: 0
+            }
+            .recortada_a(1920, 1080),
+            None
+        );
+        assert_eq!(
+            Region {
+                x: 5000,
+                y: 5000,
+                ancho: 10,
+                alto: 10
+            }
+            .recortada_a(1920, 1080),
+            None
+        );
+        assert_eq!(
+            Region {
+                x: -100,
+                y: -100,
+                ancho: 50,
+                alto: 50
+            }
+            .recortada_a(1920, 1080),
+            None
+        );
     }
 
     #[test]
     fn la_region_completa_sobrevive_intacta() {
-        let region = Region { x: 0, y: 0, ancho: 1920, alto: 1080 };
+        let region = Region {
+            x: 0,
+            y: 0,
+            ancho: 1920,
+            alto: 1080,
+        };
         assert_eq!(region.recortada_a(1920, 1080), Some(region));
     }
 
@@ -431,8 +550,14 @@ mod tests {
 
     #[test]
     fn las_dimensiones_salen_de_la_cabecera() {
-        assert_eq!(dimensiones_png(&cabecera_png(1920, 1080)), Some((1920, 1080)));
-        assert_eq!(dimensiones_png(&cabecera_png(3840, 2160)), Some((3840, 2160)));
+        assert_eq!(
+            dimensiones_png(&cabecera_png(1920, 1080)),
+            Some((1920, 1080))
+        );
+        assert_eq!(
+            dimensiones_png(&cabecera_png(3840, 2160)),
+            Some((3840, 2160))
+        );
     }
 
     #[test]
@@ -441,9 +566,21 @@ mod tests {
         // hay que decirlo en lugar de seguir con dimensiones inventadas.
         assert_eq!(dimensiones_png(b""), None);
         assert_eq!(dimensiones_png(b"no soy un png en absoluto..."), None);
-        assert_eq!(dimensiones_png(&cabecera_png(1920, 1080)[..20]), None, "cabecera cortada");
-        assert_eq!(dimensiones_png(&cabecera_png(0, 1080)), None, "cero de ancho");
-        assert_eq!(dimensiones_png(&cabecera_png(1920, 0)), None, "cero de alto");
+        assert_eq!(
+            dimensiones_png(&cabecera_png(1920, 1080)[..20]),
+            None,
+            "cabecera cortada"
+        );
+        assert_eq!(
+            dimensiones_png(&cabecera_png(0, 1080)),
+            None,
+            "cero de ancho"
+        );
+        assert_eq!(
+            dimensiones_png(&cabecera_png(1920, 0)),
+            None,
+            "cero de alto"
+        );
     }
 
     /// El recorte de verdad, sobre una imagen conocida.
@@ -479,11 +616,20 @@ mod tests {
         // este test tenía al principio— invertir `x` e `y` daba exactamente el
         // mismo recorte y el test pasaba igual. Así, invertirlas cae en el
         // cuadrante azul y con las medidas al revés.
-        let region = Region { x: 90, y: 50, ancho: -30, alto: -40 };
+        let region = Region {
+            x: 90,
+            y: 50,
+            ancho: -30,
+            alto: -40,
+        };
         recortar(&origen, region, &destino).expect("recortar");
 
         let recorte = image::open(&destino).expect("leer el recorte").to_rgb8();
-        assert_eq!(recorte.dimensions(), (30, 40), "el ancho y el alto no son intercambiables");
+        assert_eq!(
+            recorte.dimensions(),
+            (30, 40),
+            "el ancho y el alto no son intercambiables"
+        );
         assert_eq!(
             *recorte.get_pixel(15, 20),
             image::Rgb([0, 255, 0]),
@@ -491,7 +637,12 @@ mod tests {
         );
 
         // Y una selección fuera de la imagen no escribe nada.
-        let afuera = Region { x: 500, y: 500, ancho: 10, alto: 10 };
+        let afuera = Region {
+            x: 500,
+            y: 500,
+            ancho: 10,
+            alto: 10,
+        };
         assert!(recortar(&origen, afuera, &dir.join("no.png")).is_err());
         assert!(!dir.join("no.png").exists());
 
@@ -504,8 +655,18 @@ mod tests {
     /// donde apareció el bug. La composición de `grim` mide 1920x2160 y la
     /// ventana del selector 1920x1080.
     fn apilados() -> (Salida, Salida, (f64, f64)) {
-        let arriba = Salida { x: 0, y: 0, ancho: 1920, alto: 1080 };
-        let abajo = Salida { x: 0, y: 1080, ancho: 1920, alto: 1080 };
+        let arriba = Salida {
+            x: 0,
+            y: 0,
+            ancho: 1920,
+            alto: 1080,
+        };
+        let abajo = Salida {
+            x: 0,
+            y: 1080,
+            ancho: 1920,
+            alto: 1080,
+        };
         let escala = escala_de((1920, 2160), Salida::entera(1920, 2160));
         (arriba, abajo, escala)
     }
@@ -517,18 +678,33 @@ mod tests {
         // en coordenadas de la ventana y se usaba como coordenadas de la
         // captura sin sumar el origen de la salida.
         let (arriba, abajo, escala) = apilados();
-        let seleccion = Region { x: 100, y: 40, ancho: 300, alto: 200 };
+        let seleccion = Region {
+            x: 100,
+            y: 40,
+            ancho: 300,
+            alto: 200,
+        };
 
         // En la pantalla de arriba, el origen es cero y no cambia nada.
         assert_eq!(
             seleccion.en_la_captura(arriba, escala),
-            Region { x: 100, y: 40, ancho: 300, alto: 200 }
+            Region {
+                x: 100,
+                y: 40,
+                ancho: 300,
+                alto: 200
+            }
         );
 
         // En la de abajo, la misma selección tiene que caer 1080 más abajo.
         assert_eq!(
             seleccion.en_la_captura(abajo, escala),
-            Region { x: 100, y: 1120, ancho: 300, alto: 200 },
+            Region {
+                x: 100,
+                y: 1120,
+                ancho: 300,
+                alto: 200
+            },
             "la selección de la pantalla de abajo se recortó de la de arriba"
         );
     }
@@ -539,22 +715,49 @@ mod tests {
         // nunca en la otra. Es la propiedad que el bug rompía.
         let (arriba, abajo, escala) = apilados();
         for y in [0, 1, 540, 1079] {
-            let r = Region { x: 10, y, ancho: 20, alto: 1 };
+            let r = Region {
+                x: 10,
+                y,
+                ancho: 20,
+                alto: 1,
+            };
             let en_arriba = r.en_la_captura(arriba, escala);
             let en_abajo = r.en_la_captura(abajo, escala);
-            assert!(en_arriba.y < 1080, "{en_arriba:?} se fue a la pantalla de abajo");
-            assert!(en_abajo.y >= 1080, "{en_abajo:?} se fue a la pantalla de arriba");
+            assert!(
+                en_arriba.y < 1080,
+                "{en_arriba:?} se fue a la pantalla de abajo"
+            );
+            assert!(
+                en_abajo.y >= 1080,
+                "{en_abajo:?} se fue a la pantalla de arriba"
+            );
         }
     }
 
     #[test]
     fn tambien_funciona_lado_a_lado() {
         // El otro layout habitual. Acá el que se corre es el eje x.
-        let derecha = Salida { x: 1920, y: 0, ancho: 1920, alto: 1080 };
+        let derecha = Salida {
+            x: 1920,
+            y: 0,
+            ancho: 1920,
+            alto: 1080,
+        };
         let escala = escala_de((3840, 1080), Salida::entera(3840, 1080));
         assert_eq!(
-            Region { x: 5, y: 5, ancho: 100, alto: 100 }.en_la_captura(derecha, escala),
-            Region { x: 1925, y: 5, ancho: 100, alto: 100 }
+            Region {
+                x: 5,
+                y: 5,
+                ancho: 100,
+                alto: 100
+            }
+            .en_la_captura(derecha, escala),
+            Region {
+                x: 1925,
+                y: 5,
+                ancho: 100,
+                alto: 100
+            }
         );
     }
 
@@ -565,7 +768,12 @@ mod tests {
         let sola = Salida::entera(1920, 1080);
         let escala = escala_de((1920, 1080), Salida::entera(1920, 1080));
         assert_eq!(escala, (1.0, 1.0));
-        let r = Region { x: 33, y: 77, ancho: 200, alto: 150 };
+        let r = Region {
+            x: 33,
+            y: 77,
+            ancho: 200,
+            alto: 150,
+        };
         assert_eq!(r.en_la_captura(sola, escala), r);
     }
 
@@ -577,9 +785,19 @@ mod tests {
         let escala = escala_de((3840, 2160), Salida::entera(1920, 1080));
         assert_eq!(escala, (2.0, 2.0));
         assert_eq!(
-            Region { x: 100, y: 50, ancho: 300, alto: 200 }
-                .en_la_captura(Salida::entera(1920, 1080), escala),
-            Region { x: 200, y: 100, ancho: 600, alto: 400 }
+            Region {
+                x: 100,
+                y: 50,
+                ancho: 300,
+                alto: 200
+            }
+            .en_la_captura(Salida::entera(1920, 1080), escala),
+            Region {
+                x: 200,
+                y: 100,
+                ancho: 600,
+                alto: 400
+            }
         );
     }
 
@@ -589,10 +807,20 @@ mod tests {
         // se multiplicaran sin normalizar, el resultado tendría un ancho
         // negativo y el recorte fallaría sin decir por qué.
         let (_, abajo, escala) = apilados();
-        let arrastre_al_reves = Region { x: 400, y: 240, ancho: -300, alto: -200 };
+        let arrastre_al_reves = Region {
+            x: 400,
+            y: 240,
+            ancho: -300,
+            alto: -200,
+        };
         assert_eq!(
             arrastre_al_reves.en_la_captura(abajo, escala),
-            Region { x: 100, y: 1120, ancho: 300, alto: 200 }
+            Region {
+                x: 100,
+                y: 1120,
+                ancho: 300,
+                alto: 200
+            }
         );
     }
 
@@ -609,23 +837,53 @@ mod tests {
         // primario tiene x negativo, y `grim` compone desde la esquina mínima.
         // Quedándose sólo con los máximos, el ancho salía mal y el recorte pedía
         // coordenadas negativas.
-        let layout = Salida { x: -1920, y: 0, ancho: 3840, alto: 1080 };
-        let izquierda = Salida { x: -1920, y: 0, ancho: 1920, alto: 1080 };
-        let primaria = Salida { x: 0, y: 0, ancho: 1920, alto: 1080 };
+        let layout = Salida {
+            x: -1920,
+            y: 0,
+            ancho: 3840,
+            alto: 1080,
+        };
+        let izquierda = Salida {
+            x: -1920,
+            y: 0,
+            ancho: 1920,
+            alto: 1080,
+        };
+        let primaria = Salida {
+            x: 0,
+            y: 0,
+            ancho: 1920,
+            alto: 1080,
+        };
         let escala = escala_de((3840, 1080), layout);
         assert_eq!(escala, (1.0, 1.0));
 
-        let seleccion = Region { x: 10, y: 20, ancho: 100, alto: 50 };
+        let seleccion = Region {
+            x: 10,
+            y: 20,
+            ancho: 100,
+            alto: 50,
+        };
 
         // La de la izquierda es la que aporta el arranque de la imagen.
         assert_eq!(
             seleccion.en_la_captura(izquierda.relativa_a(layout), escala),
-            Region { x: 10, y: 20, ancho: 100, alto: 50 }
+            Region {
+                x: 10,
+                y: 20,
+                ancho: 100,
+                alto: 50
+            }
         );
         // Y la primaria queda desplazada 1920, no en cero.
         assert_eq!(
             seleccion.en_la_captura(primaria.relativa_a(layout), escala),
-            Region { x: 1930, y: 20, ancho: 100, alto: 50 }
+            Region {
+                x: 1930,
+                y: 20,
+                ancho: 100,
+                alto: 50
+            }
         );
     }
 
@@ -633,11 +891,31 @@ mod tests {
     fn una_salida_arriba_del_origen() {
         // El mismo caso en vertical, que es el layout de la máquina del reporte
         // pero con el monitor externo puesto arriba en coordenadas negativas.
-        let layout = Salida { x: 0, y: -1080, ancho: 1920, alto: 2160 };
-        let arriba = Salida { x: 0, y: -1080, ancho: 1920, alto: 1080 };
-        let abajo = Salida { x: 0, y: 0, ancho: 1920, alto: 1080 };
+        let layout = Salida {
+            x: 0,
+            y: -1080,
+            ancho: 1920,
+            alto: 2160,
+        };
+        let arriba = Salida {
+            x: 0,
+            y: -1080,
+            ancho: 1920,
+            alto: 1080,
+        };
+        let abajo = Salida {
+            x: 0,
+            y: 0,
+            ancho: 1920,
+            alto: 1080,
+        };
         let escala = escala_de((1920, 2160), layout);
-        let r = Region { x: 5, y: 5, ancho: 40, alto: 40 };
+        let r = Region {
+            x: 5,
+            y: 5,
+            ancho: 40,
+            alto: 40,
+        };
 
         assert_eq!(r.en_la_captura(arriba.relativa_a(layout), escala).y, 5);
         assert_eq!(r.en_la_captura(abajo.relativa_a(layout), escala).y, 1085);
@@ -652,16 +930,46 @@ mod tests {
         assert_eq!(escala, (1.25, 1.25));
 
         let sola = Salida::entera(2048, 1280);
-        let r = Region { x: 2, y: 2, ancho: 2, alto: 2 }.en_la_captura(sola, escala);
+        let r = Region {
+            x: 2,
+            y: 2,
+            ancho: 2,
+            alto: 2,
+        }
+        .en_la_captura(sola, escala);
 
         // Bordes: round(2*1.25)=3 y round(4*1.25)=5, así que el ancho es 2.
-        assert_eq!(r, Region { x: 3, y: 3, ancho: 2, alto: 2 });
+        assert_eq!(
+            r,
+            Region {
+                x: 3,
+                y: 3,
+                ancho: 2,
+                alto: 2
+            }
+        );
 
         // Y el borde derecho del recorte cae donde cae el borde transformado, que
         // es la propiedad que importa: dos regiones pegadas siguen pegadas.
-        let a = Region { x: 0, y: 0, ancho: 3, alto: 1 }.en_la_captura(sola, escala);
-        let b = Region { x: 3, y: 0, ancho: 3, alto: 1 }.en_la_captura(sola, escala);
-        assert_eq!(a.x + a.ancho, b.x, "quedó un hueco o un solape entre dos regiones pegadas");
+        let a = Region {
+            x: 0,
+            y: 0,
+            ancho: 3,
+            alto: 1,
+        }
+        .en_la_captura(sola, escala);
+        let b = Region {
+            x: 3,
+            y: 0,
+            ancho: 3,
+            alto: 1,
+        }
+        .en_la_captura(sola, escala);
+        assert_eq!(
+            a.x + a.ancho,
+            b.x,
+            "quedó un hueco o un solape entre dos regiones pegadas"
+        );
     }
 
     #[test]

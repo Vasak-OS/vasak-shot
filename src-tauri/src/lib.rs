@@ -38,14 +38,110 @@ pub enum Modo {
 /// abra el selector o guarde directo, y confundirlos hace que la herramienta
 /// haga lo contrario de lo que se le pidió.
 pub fn modo_de(argumentos: &[String]) -> Modo {
-    if argumentos
-        .iter()
-        .any(|a| a == "--pantalla" || a == "-p")
-    {
+    if argumentos.iter().any(|a| a == "--pantalla" || a == "-p") {
         Modo::PantallaCompleta
     } else {
         Modo::Selector
     }
+}
+
+/// Dónde está el puntero, preguntándoselo al compositor.
+///
+/// # Por qué no alcanza con GDK
+///
+/// `GdkDevice::position()` **no funciona en Wayland**: el protocolo no deja que
+/// un cliente pregunte dónde está el puntero fuera de sus propias superficies,
+/// y GDK devuelve `(0, 0)` sin avisar de nada. Como `(0, 0)` cae siempre en la
+/// salida que está en el origen del layout, el selector aparecía siempre en la
+/// misma pantalla por más que el ratón estuviera en la otra.
+///
+/// Comprobado en una sesión de dos monitores apilados: el cursor en
+/// `y = 2109` —la pantalla de abajo, que empieza en 1080— y GDK contestando
+/// `(0, 0)`, o sea la de arriba.
+///
+/// # De dónde sale entonces
+///
+/// De wayfire, por su socket de IPC: `window-rules/get_cursor_position`
+/// devuelve la posición en coordenadas del layout, que es el mismo espacio en
+/// el que GDK ubica las salidas.
+///
+/// Si no hay socket —otro compositor, X11, una prueba— se cae a GDK, que ahí sí
+/// contesta. Preguntar primero y caer después mantiene andando lo que ya
+/// andaba en lugar de cambiar una limitación por otra.
+fn posicion_del_puntero(display: &gtk::gdk::Display) -> Option<(i32, i32)> {
+    if let Some(pos) = cursor_de_wayfire() {
+        return Some(pos);
+    }
+
+    let asiento = display.default_seat()?;
+    let puntero = asiento.pointer()?;
+    let (_, x, y) = puntero.position();
+    Some((x, y))
+}
+
+/// El cursor según wayfire, o `None` si no se lo puede preguntar.
+///
+/// El protocolo es el de su IPC: cuatro bytes con el largo, después el JSON.
+/// Ningún error se informa hacia arriba a propósito —no hay socket, no contesta,
+/// contesta otra cosa—: todos significan lo mismo para quien llama, que es
+/// «preguntale a GDK».
+fn cursor_de_wayfire() -> Option<(i32, i32)> {
+    cursor_de_wayfire_en(std::env::var_os("WAYFIRE_SOCKET")?)
+}
+
+/// Lo mismo, contra un socket concreto.
+///
+/// La ruta entra por argumento y no se lee acá para poder probarlo sin tocar el
+/// entorno del proceso: `cargo test` corre en hilos que lo comparten, así que
+/// una prueba que lo modifica le cambia el mundo a las otras — y la que
+/// necesitaba el socket se salteaba sola.
+fn cursor_de_wayfire_en(ruta: impl AsRef<std::path::Path>) -> Option<(i32, i32)> {
+    use std::io::{Read, Write};
+
+    /// Cuánto se espera a cada operación del socket.
+    ///
+    /// Sin esto, un compositor que deja de contestar cuelga la captura para
+    /// siempre: `read_exact` bloquea, y el camino de GDK —que es el que tenía
+    /// que salvar el caso— no se llega a ejecutar nunca. Un segundo es
+    /// larguísimo para una consulta local; lo que importa es que exista.
+    const ESPERA: std::time::Duration = std::time::Duration::from_secs(1);
+
+    /// Techo del cuerpo de la respuesta.
+    ///
+    /// El largo lo dice el otro extremo, y `WAYFIRE_SOCKET` es una variable de
+    /// entorno: quien la controle puede anunciar un marco de gigabytes y hacer
+    /// que esto reserve memoria hasta morirse, en lugar de caer a GDK. La
+    /// respuesta real son unas decenas de bytes.
+    const TECHO: u32 = 64 * 1024;
+
+    let mut sock = std::os::unix::net::UnixStream::connect(ruta).ok()?;
+    sock.set_read_timeout(Some(ESPERA)).ok()?;
+    sock.set_write_timeout(Some(ESPERA)).ok()?;
+
+    let pedido = br#"{"method":"window-rules/get_cursor_position","data":{}}"#;
+    sock.write_all(&(pedido.len() as u32).to_ne_bytes()).ok()?;
+    sock.write_all(pedido).ok()?;
+
+    let mut largo = [0u8; 4];
+    sock.read_exact(&mut largo).ok()?;
+    let largo = u32::from_ne_bytes(largo);
+    if largo > TECHO {
+        return None;
+    }
+
+    let mut cuerpo = vec![0u8; largo as usize];
+    sock.read_exact(&mut cuerpo).ok()?;
+
+    let respuesta: serde_json::Value = serde_json::from_slice(&cuerpo).ok()?;
+    let pos = respuesta.get("pos")?;
+    // Vienen como flotantes: el compositor las lleva en subpíxeles. `floor` y no
+    // `as i32` a secas, que trunca hacia cero: con un monitor a la izquierda del
+    // primario las coordenadas son negativas, y `-0.5` se volvería `0` — o sea
+    // el monitor del otro lado del borde.
+    Some((
+        pos.get("x")?.as_f64()?.floor() as i32,
+        pos.get("y")?.as_f64()?.floor() as i32,
+    ))
 }
 
 /// La salida donde está el puntero, y el rectángulo que ocupa en el layout.
@@ -54,14 +150,17 @@ pub fn modo_de(argumentos: &[String]) -> Modo {
 /// mirando la pantalla donde tiene el ratón, y esperar que el selector aparezca
 /// en la otra es de las cosas que hacen sentir que la herramienta está rota.
 fn salida_del_puntero(display: &gtk::gdk::Display) -> Option<(gtk::gdk::Monitor, Salida)> {
-    let asiento = display.default_seat()?;
-    let puntero = asiento.pointer()?;
-    let (_, x, y) = puntero.position();
+    let (x, y) = posicion_del_puntero(display)?;
     let monitor = display.monitor_at_point(x, y)?;
     let g = monitor.geometry();
     Some((
         monitor,
-        Salida { x: g.x(), y: g.y(), ancho: g.width(), alto: g.height() },
+        Salida {
+            x: g.x(),
+            y: g.y(),
+            ancho: g.width(),
+            alto: g.height(),
+        },
     ))
 }
 
@@ -95,10 +194,20 @@ fn layout_de(display: &gtk::gdk::Display) -> Salida {
     // Sin ninguna salida no hay rectángulo que devolver, y un cero es más honesto
     // que los centinelas: `escala_de` lo trata como «no sé» y responde escala uno.
     if min_x > max_x || min_y > max_y {
-        return Salida { x: 0, y: 0, ancho: 0, alto: 0 };
+        return Salida {
+            x: 0,
+            y: 0,
+            ancho: 0,
+            alto: 0,
+        };
     }
 
-    Salida { x: min_x, y: min_y, ancho: max_x - min_x, alto: max_y - min_y }
+    Salida {
+        x: min_x,
+        y: min_y,
+        ancho: max_x - min_x,
+        alto: max_y - min_y,
+    }
 }
 
 /// Deja la ventana del selector tapando una salida, panel incluido, y dice cuál.
@@ -243,6 +352,134 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Un wayfire de mentira, para ejercitar el protocolo en cualquier máquina.
+    ///
+    /// Sirve una sola respuesta con el enmarcado real —cuatro bytes de largo y
+    /// después el JSON— y devuelve la ruta del socket. Sin esto, el camino que
+    /// arma el pedido y parsea la respuesta no lo recorría nadie en CI: la única
+    /// prueba que lo tocaba se salteaba sola donde no hay sesión.
+    fn wayfire_de_mentira(
+        cuerpo: &'static str,
+    ) -> (std::path::PathBuf, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+
+        let ruta = std::env::temp_dir().join(format!(
+            "vasak-shot-prueba-{}-{:?}.sock",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_file(&ruta);
+        let escucha = std::os::unix::net::UnixListener::bind(&ruta).expect("socket de prueba");
+
+        let hilo = std::thread::spawn(move || {
+            if let Ok((mut sock, _)) = escucha.accept() {
+                // Se lee el pedido entero antes de contestar: si no, el cliente
+                // puede ver un socket cerrado a mitad de su `write_all`.
+                let mut largo = [0u8; 4];
+                if sock.read_exact(&mut largo).is_ok() {
+                    let mut pedido = vec![0u8; u32::from_ne_bytes(largo) as usize];
+                    let _ = sock.read_exact(&mut pedido);
+                }
+                let _ = sock.write_all(&(cuerpo.len() as u32).to_ne_bytes());
+                let _ = sock.write_all(cuerpo.as_bytes());
+            }
+        });
+
+        (ruta, hilo)
+    }
+
+    /// El enmarcado y el parseo, contra un servidor de mentira.
+    #[test]
+    fn la_respuesta_enmarcada_se_lee_entera() {
+        let (ruta, hilo) = wayfire_de_mentira(r#"{"result":"ok","pos":{"x":828.34,"y":2109.18}}"#);
+        let pos = cursor_de_wayfire_en(&ruta);
+        hilo.join().unwrap();
+        let _ = std::fs::remove_file(&ruta);
+
+        assert_eq!(pos, Some((828, 2109)));
+    }
+
+    /// Las negativas se redondean hacia abajo, no hacia cero.
+    ///
+    /// `as i32` trunca hacia cero, así que `-0.5` daría `0`: con un monitor a la
+    /// izquierda del primario eso elige el del otro lado del borde, que es el
+    /// mismo error que este arreglo vino a corregir.
+    #[test]
+    fn una_coordenada_negativa_no_se_va_al_otro_monitor() {
+        let (ruta, hilo) = wayfire_de_mentira(r#"{"result":"ok","pos":{"x":-0.5,"y":-1920.5}}"#);
+        let pos = cursor_de_wayfire_en(&ruta);
+        hilo.join().unwrap();
+        let _ = std::fs::remove_file(&ruta);
+
+        assert_eq!(pos, Some((-1, -1921)));
+    }
+
+    /// Un marco enorme se rechaza en vez de reservar la memoria que anuncia.
+    ///
+    /// El largo lo dice el otro extremo y la ruta sale de una variable de
+    /// entorno: sin techo, quien la controle hace que esto intente reservar
+    /// gigabytes en lugar de caer a GDK.
+    #[test]
+    fn un_marco_gigante_no_se_reserva() {
+        use std::io::{Read, Write};
+
+        let ruta =
+            std::env::temp_dir().join(format!("vasak-shot-gigante-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&ruta);
+        let escucha = std::os::unix::net::UnixListener::bind(&ruta).expect("socket de prueba");
+
+        let hilo = std::thread::spawn(move || {
+            if let Ok((mut sock, _)) = escucha.accept() {
+                let mut largo = [0u8; 4];
+                if sock.read_exact(&mut largo).is_ok() {
+                    let mut pedido = vec![0u8; u32::from_ne_bytes(largo) as usize];
+                    let _ = sock.read_exact(&mut pedido);
+                }
+                // Anuncia casi cuatro gigabytes y no manda nada.
+                let _ = sock.write_all(&u32::MAX.to_ne_bytes());
+            }
+        });
+
+        let pos = cursor_de_wayfire_en(&ruta);
+        hilo.join().unwrap();
+        let _ = std::fs::remove_file(&ruta);
+
+        assert_eq!(
+            pos, None,
+            "un largo imposible tiene que caer al camino de GDK"
+        );
+    }
+
+    /// Sin compositor al que preguntarle, se cae a GDK en vez de romper.
+    ///
+    /// Es el camino de X11, de otro compositor y de una máquina de integración.
+    /// Que devuelva `None` es lo que deja que `posicion_del_puntero` siga.
+    #[test]
+    fn sin_socket_no_hay_cursor_por_ipc() {
+        assert_eq!(cursor_de_wayfire_en("/no/existe/este/socket"), None);
+    }
+
+    /// Con wayfire andando, la posición sale de él y no es `(0, 0)` de mentira.
+    ///
+    /// El bug era ése: en Wayland `GdkDevice::position()` contesta `(0, 0)` sin
+    /// avisar, y `(0, 0)` cae siempre en la salida del origen del layout, así
+    /// que el selector aparecía siempre en la misma pantalla.
+    ///
+    /// Se saltea sin socket —una máquina de integración no tiene sesión— porque
+    /// lo único que puede comprobar acá es que el compositor conteste.
+    #[test]
+    fn con_wayfire_la_posicion_sale_del_compositor() {
+        if std::env::var_os("WAYFIRE_SOCKET").is_none() {
+            return;
+        }
+
+        let ruta = std::env::var_os("WAYFIRE_SOCKET").expect("recién se comprobó");
+        let (x, y) = cursor_de_wayfire_en(ruta).expect("wayfire tiene que contestar la posición");
+        // Nada de rangos inventados: sólo que sea una coordenada de layout
+        // plausible. Lo que importa es que venga del compositor.
+        assert!(x > i32::MIN && y > i32::MIN, "({x}, {y})");
+    }
 
     #[test]
     fn sin_argumentos_se_abre_el_selector() {

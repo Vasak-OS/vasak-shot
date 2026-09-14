@@ -157,8 +157,14 @@ mod tests {
 
     #[test]
     fn sin_la_clave_no_se_inventa_una_carpeta() {
-        assert_eq!(imagenes_en_user_dirs("XDG_MUSIC_DIR=\"$HOME/Musica\"", "/home/pato"), None);
-        assert_eq!(imagenes_en_user_dirs("XDG_PICTURES_DIR=\"\"", "/home/pato"), None);
+        assert_eq!(
+            imagenes_en_user_dirs("XDG_MUSIC_DIR=\"$HOME/Musica\"", "/home/pato"),
+            None
+        );
+        assert_eq!(
+            imagenes_en_user_dirs("XDG_PICTURES_DIR=\"\"", "/home/pato"),
+            None
+        );
     }
 
     #[test]
