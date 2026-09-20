@@ -1,6 +1,6 @@
 [package]
 name = "vasak-shot"
-version = "0.2.6"
+version = "0.2.7"
 description = "Capturas de pantalla de VasakOS"
 authors = ["Vasak Group", "Joaquin (Pato) Decima"]
 edition = "2021"
@@ -42,6 +42,11 @@ gtk-layer-shell = "0.8"
 # no hace falta arrastrar los decodificadores de todo lo demás.
 image = { version = "0.25", default-features = false, features = ["png"] }
 tauri-plugin-vsk-journal = "2"
+wayland-client = "0.31"
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
+memmap2 = "0.9"
+rustix = { version = "1", features = ["shm", "fs"] }
 
 [dev-dependencies]
 # Sólo para el test que valida los catálogos de idioma: el plugin los parsea en
