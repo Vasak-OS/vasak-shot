@@ -1,6 +1,6 @@
 [package]
 name = "vasak-shot"
-version = "0.2.3"
+version = "0.2.4"
 description = "Capturas de pantalla de VasakOS"
 authors = ["Vasak Group", "Joaquin (Pato) Decima"]
 edition = "2021"
