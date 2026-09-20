@@ -4234,7 +4234,7 @@ dependencies = [
 
 [[package]]
 name = "vasak-shot"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "gtk",
  "gtk-layer-shell",
