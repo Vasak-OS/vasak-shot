@@ -17,6 +17,7 @@ pub mod captura;
 pub mod comandos;
 pub mod destino;
 mod locales;
+pub mod pantalla;
 
 use captura::Salida;
 use gtk::prelude::*;

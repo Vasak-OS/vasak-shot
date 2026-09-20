@@ -14,13 +14,18 @@
 //! la selección se hace sobre una imagen quieta en lugar de sobre una pantalla
 //! que sigue cambiando debajo.
 //!
-//! # Por qué `grim` y no el protocolo de Wayland a mano
+//! # Por qué los píxeles los tomamos nosotros
 //!
-//! `grim` ya habla `zwlr_screencopy` correctamente, maneja varias salidas y sus
-//! escalas, y viene instalado en la ISO. Reimplementarlo sería reescribir la parte
-//! difícil para llegar al mismo lugar. Se recorta acá y no con `grim -g` por una
-//! razón: una sola captura en lugar de dos, así lo que se guarda es exactamente el
-//! instante que se vio.
+//! Durante un tiempo esto llamaba a `grim`, que habla `zwlr_screencopy` bien y
+//! viene en la ISO. El motivo para dejar de hacerlo no es técnico sino de
+//! permisos: el escritorio limita **por ejecutable** quién puede pedirle al
+//! compositor los protocolos que ven la sesión, y con `grim` en esa lista
+//! cualquier programa capturaba la pantalla entera llamándolo. Medido: un guion
+//! de dos líneas sacó una captura de 290 950 bytes sin estar permitido.
+//!
+//! Así que la parte difícil está en `pantalla.rs`, y `grim` puede salir de la
+//! lista. Se sigue recortando acá y no al capturar: una sola captura en lugar de
+//! dos, así lo que se guarda es exactamente el instante que se vio.
 //!
 //! # Dos espacios de coordenadas, y por qué se confundían
 //!
@@ -44,9 +49,6 @@
 //! importa: sumar el origen de la salida y multiplicar por la escala.
 
 use std::path::{Path, PathBuf};
-
-/// El programa que toma los píxeles.
-const GRIM: &str = "grim";
 
 /// Una captura ya tomada, esperando en disco.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -223,29 +225,6 @@ pub fn escala_de(imagen: (u32, u32), layout: Salida) -> (f64, f64) {
     (ex, ey)
 }
 
-/// Alto y ancho de un PNG, leídos de su cabecera.
-///
-/// Se leen los 24 primeros bytes en lugar de decodificar la imagen entera: para
-/// saber el tamaño de una captura de 1920x1080 no hace falta traer ocho megabytes
-/// de píxeles a memoria.
-///
-/// El formato lo fija la especificación: 8 bytes de firma, 4 de longitud, `IHDR`,
-/// y ahí el ancho y el alto como enteros de 32 bits big-endian.
-pub fn dimensiones_png(bytes: &[u8]) -> Option<(u32, u32)> {
-    const FIRMA: &[u8] = b"\x89PNG\r\n\x1a\n";
-    if bytes.len() < 24 || !bytes.starts_with(FIRMA) || &bytes[12..16] != b"IHDR" {
-        return None;
-    }
-    let ancho = u32::from_be_bytes(bytes[16..20].try_into().ok()?);
-    let alto = u32::from_be_bytes(bytes[20..24].try_into().ok()?);
-    // Un PNG de cero píxeles no es válido, y aceptarlo haría que el recorte
-    // devolviera `None` sin poder distinguirlo de una selección vacía.
-    if ancho == 0 || alto == 0 {
-        return None;
-    }
-    Some((ancho, alto))
-}
-
 /// El nombre del archivo para una captura, a partir de la fecha.
 ///
 /// Con segundos, porque dos capturas seguidas dentro del mismo minuto son lo
@@ -264,24 +243,13 @@ pub fn nombre_de_archivo(
 
 /// Toma la captura de todo lo que se ve.
 pub fn capturar(destino: &Path) -> Result<Captura, String> {
-    let salida = std::process::Command::new(GRIM)
-        .arg(destino)
-        .output()
-        .map_err(|e| format!("no se pudo ejecutar {GRIM}: {e}"))?;
+    let lienzo = crate::pantalla::capturar_pantallas()?;
+    let (ancho, alto) = (lienzo.imagen.width(), lienzo.imagen.height());
 
-    if !salida.status.success() {
-        let motivo = String::from_utf8_lossy(&salida.stderr).trim().to_string();
-        return Err(if motivo.is_empty() {
-            format!("{GRIM} falló sin decir por qué")
-        } else {
-            motivo
-        });
-    }
-
-    // Se leen sólo los bytes de la cabecera, no el archivo entero.
-    let cabecera = leer_cabecera(destino)?;
-    let (ancho, alto) = dimensiones_png(&cabecera)
-        .ok_or_else(|| format!("{} no parece un PNG válido", destino.display()))?;
+    lienzo
+        .imagen
+        .save(destino)
+        .map_err(|e| format!("no se pudo guardar {}: {e}", destino.display()))?;
 
     Ok(Captura {
         ruta: destino.to_path_buf(),
@@ -289,20 +257,6 @@ pub fn capturar(destino: &Path) -> Result<Captura, String> {
         alto,
     })
 }
-
-/// Los primeros bytes de un archivo, los que alcanzan para el `IHDR`.
-fn leer_cabecera(ruta: &Path) -> Result<Vec<u8>, String> {
-    use std::io::Read;
-    let mut archivo = std::fs::File::open(ruta)
-        .map_err(|e| format!("no se pudo abrir {}: {e}", ruta.display()))?;
-    let mut cabecera = [0u8; 24];
-    let leidos = archivo
-        .read(&mut cabecera)
-        .map_err(|e| format!("no se pudo leer {}: {e}", ruta.display()))?;
-    Ok(cabecera[..leidos].to_vec())
-}
-
-// ── Recorte y entrega ──────────────────────────────────────
 
 /// Recorta la captura a la región elegida y la guarda en `destino`.
 ///
@@ -536,51 +490,6 @@ mod tests {
             alto: 1080,
         };
         assert_eq!(region.recortada_a(1920, 1080), Some(region));
-    }
-
-    /// La cabecera de un PNG armada a mano, que es lo que lee `dimensiones_png`.
-    fn cabecera_png(ancho: u32, alto: u32) -> Vec<u8> {
-        let mut b = b"\x89PNG\r\n\x1a\n".to_vec();
-        b.extend_from_slice(&13u32.to_be_bytes());
-        b.extend_from_slice(b"IHDR");
-        b.extend_from_slice(&ancho.to_be_bytes());
-        b.extend_from_slice(&alto.to_be_bytes());
-        b
-    }
-
-    #[test]
-    fn las_dimensiones_salen_de_la_cabecera() {
-        assert_eq!(
-            dimensiones_png(&cabecera_png(1920, 1080)),
-            Some((1920, 1080))
-        );
-        assert_eq!(
-            dimensiones_png(&cabecera_png(3840, 2160)),
-            Some((3840, 2160))
-        );
-    }
-
-    #[test]
-    fn lo_que_no_es_un_png_se_rechaza() {
-        // Si `grim` fallara dejando un archivo a medias, o escribiera otra cosa,
-        // hay que decirlo en lugar de seguir con dimensiones inventadas.
-        assert_eq!(dimensiones_png(b""), None);
-        assert_eq!(dimensiones_png(b"no soy un png en absoluto..."), None);
-        assert_eq!(
-            dimensiones_png(&cabecera_png(1920, 1080)[..20]),
-            None,
-            "cabecera cortada"
-        );
-        assert_eq!(
-            dimensiones_png(&cabecera_png(0, 1080)),
-            None,
-            "cero de ancho"
-        );
-        assert_eq!(
-            dimensiones_png(&cabecera_png(1920, 0)),
-            None,
-            "cero de alto"
-        );
     }
 
     /// El recorte de verdad, sobre una imagen conocida.
