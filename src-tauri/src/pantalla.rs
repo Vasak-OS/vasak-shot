@@ -65,8 +65,19 @@ use wayland_protocols_wlr::screencopy::v1::client::{
 /// Una pantalla, con lo que hace falta para ubicarla y copiarla.
 #[derive(Default)]
 struct Pantalla {
-    /// Posición y tamaño en el espacio del layout, de `xdg_output`.
-    logica: Option<(i32, i32, i32, i32)>,
+    /// Dónde empieza en el layout. De `xdg_output`.
+    ///
+    /// Va separada del tamaño porque llegan en **dos eventos distintos**, y
+    /// dar la geometría por completa con el primero fue un error de verdad: con
+    /// la posición puesta y el tamaño todavía sin llegar, esto se daba por
+    /// terminado y el lienzo salía de cero píxeles. Lo marcó la revisión.
+    posicion: Option<(i32, i32)>,
+    /// Cuánto ocupa en el layout. De `xdg_output`.
+    tamanio: Option<(i32, i32)>,
+    /// El compositor avisó que el contenido viene dado vuelta de arriba abajo.
+    invertida: bool,
+    /// Por qué no se pudo copiar ésta, si no se pudo.
+    motivo: Option<String>,
     /// Lo que el compositor dijo del buffer: formato, ancho, alto y paso.
     buffer: Option<(Format, u32, u32, u32)>,
     /// La memoria donde el compositor escribe, mientras dura la copia.
@@ -90,7 +101,6 @@ struct Estado {
     /// De cada objeto a la pantalla que le corresponde, para saber a quién anotar.
     de_xdg: HashMap<u32, u32>,
     de_frame: HashMap<u32, u32>,
-    error: Option<String>,
 }
 
 /// El lienzo compuesto: lo que se guarda como PNG.
@@ -128,7 +138,6 @@ pub fn capturar_pantallas() -> Result<Lienzo, String> {
         pantallas: HashMap::new(),
         de_xdg: HashMap::new(),
         de_frame: HashMap::new(),
-        error: None,
     };
 
     // Las salidas del registro, cada una con su xdg_output y su copia pedida.
@@ -161,52 +170,85 @@ pub fn capturar_pantallas() -> Result<Lienzo, String> {
         estado.de_frame.insert(cuadro.id().protocol_id(), id);
     }
 
-    // Se bombea hasta que cada pantalla tenga su geometría y sus píxeles, o
-    // hasta que algo falle. Sin tope de vueltas: quien corta es el compositor,
-    // que contesta `ready` o `failed` por cada copia.
-    while estado.error.is_none() && !estado.terminado() {
+    // Se bombea hasta que cada pantalla haya contestado: con sus píxeles o con
+    // un fallo. Sin tope de vueltas: quien corta es el compositor, que contesta
+    // `ready` o `failed` por cada copia.
+    //
+    // Una que falle **no** corta a las demás. Dos pantallas y una que el
+    // compositor no quiere copiar dan una captura de la otra, que es mejor que
+    // ninguna; sólo si no queda ninguna usable esto devuelve error, y entonces
+    // el mensaje lleva los motivos de las que fallaron.
+    while !estado.terminado() {
         cola.blocking_dispatch(&mut estado)
             .map_err(|e| format!("se cortó la conversación con el compositor: {e}"))?;
-    }
-
-    if let Some(error) = estado.error {
-        return Err(error);
     }
 
     componer(&estado.pantallas)
 }
 
+/// Todas las pantallas contestaron: geometría y píxeles, o fallo.
+///
+/// La geometría pide **las dos** mitades. Con sólo una, lo que falta puede
+/// estar por llegar en el evento siguiente.
+///
+/// Va suelta y no como método de `Estado` para poder probarla sin una conexión
+/// de Wayland: `Estado` lleva adentro un `wl_shm`, que no existe fuera de una
+/// sesión. Mismo criterio que `decidir` en el plugin de permisos.
+fn todas_contestaron(pantallas: &HashMap<u32, Pantalla>) -> bool {
+    pantallas
+        .values()
+        .all(|p| p.fallada || (p.posicion.is_some() && p.tamanio.is_some() && p.pixeles.is_some()))
+}
+
+/// Marca una pantalla como perdida, con su motivo. No toca a las demás.
+fn dar_por_perdida(pantallas: &mut HashMap<u32, Pantalla>, id: u32, motivo: String) {
+    if let Some(pantalla) = pantallas.get_mut(&id) {
+        pantalla.fallada = true;
+        pantalla.motivo.get_or_insert(motivo);
+        // Lo copiado a medias no sirve y la memoria es grande.
+        pantalla.mapa = None;
+        pantalla.recursos = None;
+    }
+}
+
 impl Estado {
-    /// Todas las pantallas contestaron: geometría y píxeles, o fallo.
     fn terminado(&self) -> bool {
-        self.pantallas
-            .values()
-            .all(|p| p.fallada || (p.logica.is_some() && p.pixeles.is_some()))
+        todas_contestaron(&self.pantallas)
     }
 
-    fn anotar(&mut self, id: u32, error: String) {
-        self.error.get_or_insert(error);
-        if let Some(pantalla) = self.pantallas.get_mut(&id) {
-            pantalla.fallada = true;
-        }
+    fn anotar(&mut self, id: u32, motivo: String) {
+        dar_por_perdida(&mut self.pantallas, id, motivo);
     }
 }
 
 /// Lo que hace falta de una pantalla para pegarla: dónde va y qué píxeles tiene.
-type Puesta<'a> = (&'a (i32, i32, i32, i32), &'a RgbaImage);
+type Puesta<'a> = ((i32, i32, i32, i32), &'a RgbaImage);
 
 /// Pega cada pantalla en su lugar del layout.
 fn componer(pantallas: &HashMap<u32, Pantalla>) -> Result<Lienzo, String> {
     let utiles: Vec<Puesta<'_>> = pantallas
         .values()
-        .filter_map(|p| match (&p.logica, &p.pixeles) {
-            (Some(logica), Some(pixeles)) if !p.fallada => Some((logica, pixeles)),
+        .filter_map(|p| match (p.posicion, p.tamanio, &p.pixeles) {
+            (Some((x, y)), Some((ancho, alto)), Some(pixeles)) if !p.fallada => {
+                Some(((x, y, ancho, alto), pixeles))
+            }
             _ => None,
         })
         .collect();
 
     if utiles.is_empty() {
-        return Err("ninguna pantalla se pudo copiar".to_string());
+        // Los motivos de las que fallaron, que es lo único que se sabe de por
+        // qué no hay captura. Sin esto el error sería «ninguna pantalla se pudo
+        // copiar» a secas, que no deja arreglar nada.
+        let motivos: Vec<&str> = pantallas
+            .values()
+            .filter_map(|p| p.motivo.as_deref())
+            .collect();
+        return Err(if motivos.is_empty() {
+            "ninguna pantalla se pudo copiar".to_string()
+        } else {
+            format!("ninguna pantalla se pudo copiar: {}", motivos.join("; "))
+        });
     }
 
     let x0 = utiles.iter().map(|(l, _)| l.0).min().unwrap_or(0);
@@ -249,6 +291,20 @@ fn componer(pantallas: &HashMap<u32, Pantalla>) -> Result<Lienzo, String> {
     }
 
     Ok(Lienzo { imagen: lienzo })
+}
+
+/// Los formatos que esta conversión sabe leer.
+///
+/// Los cuatro son de 32 bits por píxel, que es lo que `a_rgba` da por sentado
+/// al avanzar de a cuatro bytes. Con uno de 24 —`Bgr888`— o de 16 leería
+/// cualquier cosa y devolvería una imagen corrida en vez de un error, así que
+/// el formato se comprueba **antes** de armar el buffer: si el compositor
+/// ofrece otro, esa pantalla se da por perdida con su motivo.
+fn formato_conocido(formato: Format) -> bool {
+    matches!(
+        formato,
+        Format::Xrgb8888 | Format::Argb8888 | Format::Xbgr8888 | Format::Abgr8888
+    )
 }
 
 /// Pasa el buffer del compositor a RGBA.
@@ -336,22 +392,20 @@ impl Dispatch<ZxdgOutputV1, ()> for Estado {
         let Some(pantalla) = estado.pantallas.get_mut(&id) else {
             return;
         };
-        let (mut x, mut y, mut ancho, mut alto) = pantalla.logica.unwrap_or((0, 0, 0, 0));
+        // Cada mitad por su lado: llegan en eventos distintos y no hay orden
+        // garantizado entre ellos. El `done` de `xdg_output` no se usa —está
+        // deprecado desde su versión 3, que manda usar el de `wl_output`— y no
+        // hace falta: lo que dice que la geometría está completa es tener las
+        // dos mitades, que es lo que mira `terminado`.
         match evento {
-            zxdg_output_v1::Event::LogicalPosition { x: px, y: py } => {
-                x = px;
-                y = py;
+            zxdg_output_v1::Event::LogicalPosition { x, y } => {
+                pantalla.posicion = Some((x, y));
             }
-            zxdg_output_v1::Event::LogicalSize {
-                width: pw,
-                height: ph,
-            } => {
-                ancho = pw;
-                alto = ph;
+            zxdg_output_v1::Event::LogicalSize { width, height } => {
+                pantalla.tamanio = Some((width, height));
             }
-            _ => return,
+            _ => {}
         }
-        pantalla.logica = Some((x, y, ancho, alto));
     }
 }
 
@@ -383,44 +437,29 @@ impl Dispatch<ZwlrScreencopyFrameV1, ()> for Estado {
                     estado.anotar(id, "el compositor ofreció un formato desconocido".into());
                     return;
                 };
+                if !formato_conocido(formato) {
+                    // Se sigue escuchando por si ofrece otro: el protocolo manda
+                    // un `buffer` por cada formato que acepta, y alcanza con que
+                    // uno sirva.
+                    return;
+                }
                 if let Some(pantalla) = estado.pantallas.get_mut(&id) {
-                    pantalla.buffer = Some((formato, width, height, stride));
+                    if pantalla.buffer.is_none() {
+                        pantalla.buffer = Some((formato, width, height, stride));
+                    }
+                }
+
+                // `buffer_done` existe recién en la versión 3. Con un compositor
+                // más viejo no llega nunca, y esperarlo dejaba el bucle colgado
+                // para siempre: ahí la copia se pide acá mismo. Lo marcó la
+                // revisión.
+                if objeto.version() < 3 {
+                    armar_y_copiar(estado, id, objeto, qh);
                 }
             }
 
             zwlr_screencopy_frame_v1::Event::BufferDone => {
-                let Some((formato, ancho, alto, paso)) =
-                    estado.pantallas.get(&id).and_then(|p| p.buffer)
-                else {
-                    estado.anotar(
-                        id,
-                        "el compositor no dijo cómo tiene que ser el buffer".into(),
-                    );
-                    return;
-                };
-
-                let tamanio = (paso as usize) * (alto as usize);
-                let archivo = match memoria_compartida(tamanio) {
-                    Ok(archivo) => archivo,
-                    Err(e) => return estado.anotar(id, e),
-                };
-                let mapa = match unsafe { memmap2::MmapMut::map_mut(&archivo) } {
-                    Ok(mapa) => mapa,
-                    Err(e) => {
-                        return estado.anotar(id, format!("no se pudo mapear la memoria: {e}"))
-                    }
-                };
-                let pool = estado
-                    .shm
-                    .create_pool(archivo.as_fd(), tamanio as i32, qh, ());
-                let buffer =
-                    pool.create_buffer(0, ancho as i32, alto as i32, paso as i32, formato, qh, ());
-                objeto.copy(&buffer);
-
-                if let Some(pantalla) = estado.pantallas.get_mut(&id) {
-                    pantalla.mapa = Some(mapa);
-                    pantalla.recursos = Some((pool, buffer));
-                }
+                armar_y_copiar(estado, id, objeto, qh);
             }
 
             zwlr_screencopy_frame_v1::Event::Ready { .. } => {
@@ -435,7 +474,15 @@ impl Dispatch<ZwlrScreencopyFrameV1, ()> for Estado {
                     .and_then(|p| p.mapa.as_ref())
                     .and_then(|mapa| a_rgba(mapa, formato, ancho, alto, paso));
 
-                match convertida {
+                let invertida = estado.pantallas.get(&id).is_some_and(|p| p.invertida);
+
+                match convertida.map(|imagen| {
+                    if invertida {
+                        image::imageops::flip_vertical(&imagen)
+                    } else {
+                        imagen
+                    }
+                }) {
                     Some(imagen) => {
                         if let Some(pantalla) = estado.pantallas.get_mut(&id) {
                             pantalla.pixeles = Some(imagen);
@@ -445,6 +492,19 @@ impl Dispatch<ZwlrScreencopyFrameV1, ()> for Estado {
                         }
                     }
                     None => estado.anotar(id, "el buffer vino más corto de lo que dice".into()),
+                }
+            }
+
+            // El compositor puede entregar el contenido dado vuelta de arriba
+            // abajo. Sin mirar esto, la captura sale espejada en vertical y no
+            // hay nada que lo delate hasta que alguien la mira.
+            zwlr_screencopy_frame_v1::Event::Flags { flags } => {
+                let invertida = match flags {
+                    WEnum::Value(valor) => valor.contains(zwlr_screencopy_frame_v1::Flags::YInvert),
+                    WEnum::Unknown(_) => false,
+                };
+                if let Some(pantalla) = estado.pantallas.get_mut(&id) {
+                    pantalla.invertida = invertida;
                 }
             }
 
@@ -469,6 +529,56 @@ fn memoria_compartida(tamanio: usize) -> Result<File, String> {
     Ok(archivo)
 }
 
+/// Arma el buffer que el compositor pidió y le manda la copia.
+///
+/// Sale de `buffer_done` y también del propio `buffer` en las versiones 1 y 2
+/// del protocolo, donde aquel evento no existe.
+fn armar_y_copiar(
+    estado: &mut Estado,
+    id: u32,
+    cuadro: &ZwlrScreencopyFrameV1,
+    qh: &QueueHandle<Estado>,
+) {
+    // Si ya se pidió la copia de esta pantalla, no se pide otra: en las
+    // versiones viejas el compositor manda un `buffer` por cada formato que
+    // acepta, y el primero que sirva alcanza.
+    if estado
+        .pantallas
+        .get(&id)
+        .is_some_and(|p| p.recursos.is_some())
+    {
+        return;
+    }
+
+    let Some((formato, ancho, alto, paso)) = estado.pantallas.get(&id).and_then(|p| p.buffer)
+    else {
+        return estado.anotar(
+            id,
+            "el compositor no ofreció ningún formato que sepamos leer".into(),
+        );
+    };
+
+    let tamanio = (paso as usize) * (alto as usize);
+    let archivo = match memoria_compartida(tamanio) {
+        Ok(archivo) => archivo,
+        Err(e) => return estado.anotar(id, e),
+    };
+    let mapa = match unsafe { memmap2::MmapMut::map_mut(&archivo) } {
+        Ok(mapa) => mapa,
+        Err(e) => return estado.anotar(id, format!("no se pudo mapear la memoria: {e}")),
+    };
+    let pool = estado
+        .shm
+        .create_pool(archivo.as_fd(), tamanio as i32, qh, ());
+    let buffer = pool.create_buffer(0, ancho as i32, alto as i32, paso as i32, formato, qh, ());
+    cuadro.copy(&buffer);
+
+    if let Some(pantalla) = estado.pantallas.get_mut(&id) {
+        pantalla.mapa = Some(mapa);
+        pantalla.recursos = Some((pool, buffer));
+    }
+}
+
 #[cfg(test)]
 mod pruebas {
     use super::*;
@@ -476,7 +586,8 @@ mod pruebas {
     /// Una pantalla ya copiada, para armar composiciones a mano.
     fn pantalla(logica: (i32, i32, i32, i32), imagen: RgbaImage) -> Pantalla {
         Pantalla {
-            logica: Some(logica),
+            posicion: Some((logica.0, logica.1)),
+            tamanio: Some((logica.2, logica.3)),
             pixeles: Some(imagen),
             ..Pantalla::default()
         }
@@ -570,6 +681,108 @@ mod pruebas {
     }
 
     #[test]
+    fn con_la_geometria_a_medias_todavia_no_se_termino() {
+        // Los dos eventos de `xdg_output` llegan por separado y sin orden
+        // garantizado. Dar la geometría por completa con el primero dejaba el
+        // lienzo de cero píxeles: la posición puesta, el tamaño en nada, y esto
+        // se daba por listo. Lo marcó la revisión.
+        let mut pantallas = HashMap::new();
+        pantallas.insert(
+            1,
+            Pantalla {
+                posicion: Some((0, 0)),
+                pixeles: Some(lisa(10, 10, [0, 0, 0, 255])),
+                ..Pantalla::default()
+            },
+        );
+
+        assert!(!todas_contestaron(&pantallas), "falta el tamaño");
+
+        pantallas.get_mut(&1).unwrap().tamanio = Some((10, 10));
+        assert!(todas_contestaron(&pantallas));
+    }
+
+    #[test]
+    fn una_pantalla_perdida_no_corta_el_bucle() {
+        // El bucle espera a que **todas** contesten, y una fallada ya contestó.
+        // Con el error global de antes esto cortaba la captura entera, así que
+        // la prueba de composición que decía cubrirlo no cubría nada: el flujo
+        // no llegaba a componer.
+        let mut pantallas = HashMap::new();
+        pantallas.insert(1, pantalla((0, 0, 10, 10), lisa(10, 10, [1, 2, 3, 255])));
+        pantallas.insert(2, Pantalla::default());
+
+        assert!(
+            !todas_contestaron(&pantallas),
+            "la segunda no contestó todavía"
+        );
+
+        dar_por_perdida(&mut pantallas, 2, "el compositor la rechazó".into());
+
+        assert!(todas_contestaron(&pantallas), "una fallada ya contestó");
+        assert_eq!(
+            pantallas[&2].motivo.as_deref(),
+            Some("el compositor la rechazó")
+        );
+        // Y la que sí salió sigue entera, que es el punto.
+        assert_eq!(
+            componer(&pantallas).ok().map(|l| l.imagen.dimensions()),
+            Some((10, 10)),
+            "la que sí salió sigue entera"
+        );
+    }
+
+    #[test]
+    fn sin_ninguna_usable_el_error_dice_por_que() {
+        // «ninguna pantalla se pudo copiar» a secas no deja arreglar nada.
+        let mut pantallas = HashMap::new();
+        pantallas.insert(
+            1,
+            Pantalla {
+                fallada: true,
+                motivo: Some("el compositor la rechazó".into()),
+                ..Pantalla::default()
+            },
+        );
+
+        // Sin `unwrap_err`: pediría `Debug` sobre el lienzo, y derivarlo
+        // volcaría la imagen entera en el mensaje de una prueba que falle.
+        let Err(error) = componer(&pantallas) else {
+            panic!("con todas las pantallas perdidas no puede haber captura");
+        };
+
+        assert!(error.contains("el compositor la rechazó"), "{error}");
+    }
+
+    #[test]
+    fn los_formatos_de_menos_de_cuatro_bytes_no_se_aceptan() {
+        // `a_rgba` avanza de a cuatro bytes por píxel. Con uno de 24 bits
+        // leería corrido y devolvería una imagen torcida en vez de un error.
+        assert!(formato_conocido(Format::Xrgb8888));
+        assert!(formato_conocido(Format::Argb8888));
+        assert!(formato_conocido(Format::Xbgr8888));
+        assert!(!formato_conocido(Format::Bgr888));
+        assert!(!formato_conocido(Format::Rgb565));
+    }
+
+    #[test]
+    fn el_contenido_dado_vuelta_se_endereza() {
+        // El compositor puede entregar las filas de abajo hacia arriba y
+        // avisarlo con `YInvert`. Sin mirar esa bandera la captura sale
+        // espejada en vertical, y no hay nada que lo delate hasta que alguien
+        // la mira. Acá se comprueba la operación que hace el manejador: dos
+        // filas de colores distintos, dadas vuelta.
+        let mut cruda = RgbaImage::new(1, 2);
+        cruda.put_pixel(0, 0, image::Rgba([255, 0, 0, 255]));
+        cruda.put_pixel(0, 1, image::Rgba([0, 0, 255, 255]));
+
+        let enderezada = image::imageops::flip_vertical(&cruda);
+
+        assert_eq!(enderezada.get_pixel(0, 0), &image::Rgba([0, 0, 255, 255]));
+        assert_eq!(enderezada.get_pixel(0, 1), &image::Rgba([255, 0, 0, 255]));
+    }
+
+    #[test]
     fn una_sola_pantalla_sale_tal_cual() {
         let mut pantallas = HashMap::new();
         pantallas.insert(
@@ -642,8 +855,10 @@ mod pruebas {
         pantallas.insert(
             2,
             Pantalla {
-                logica: Some((100, 0, 100, 50)),
+                posicion: Some((100, 0)),
+                tamanio: Some((100, 50)),
                 fallada: true,
+                motivo: Some("el compositor la rechazó".into()),
                 ..Pantalla::default()
             },
         );
