@@ -1,5 +1,14 @@
 import { describe, expect, test } from 'bun:test';
-import { ajustar, anclaDe, contiene, correr, limitar, type Region, ROLES } from '@/tools/region';
+import {
+	ajustar,
+	anclaDe,
+	contiene,
+	correr,
+	limitar,
+	redimensionar,
+	type Region,
+	ROLES,
+} from '@/tools/region';
 
 const LIENZO = { ancho: 1920, alto: 1080 };
 const CENTRO: Region = { x: 400, y: 300, ancho: 200, alto: 100 };
@@ -128,5 +137,71 @@ describe('contiene', () => {
 		expect(contiene(CENTRO, { x: CENTRO.x, y: CENTRO.y })).toBe(true);
 		expect(contiene(CENTRO, { x: CENTRO.x + CENTRO.ancho, y: CENTRO.y })).toBe(false);
 		expect(contiene(CENTRO, { x: CENTRO.x, y: CENTRO.y + CENTRO.alto })).toBe(false);
+	});
+});
+
+describe('redimensionar', () => {
+	const PUNTO_FIJO = { x: 400, y: 300 };
+
+	test('el borde arrastrado queda donde está el puntero', () => {
+		expect(redimensionar(CENTRO, 'r', { x: 700, y: 999 }, LIENZO)).toEqual({
+			x: 400,
+			y: 300,
+			ancho: 300,
+			alto: 100,
+		});
+		expect(redimensionar(CENTRO, 'b', { x: 999, y: 500 }, LIENZO)).toEqual({
+			x: 400,
+			y: 300,
+			ancho: 200,
+			alto: 200,
+		});
+	});
+
+	test('después de cruzar el borde opuesto, el puntero sigue arrastrando', () => {
+		// Con diferencias sucesivas esto se rompía: al cruzar, la región se da
+		// vuelta pero el rol sigue nombrando el borde de antes, así que el
+		// movimiento siguiente agarraba el que ahora estaba del otro lado.
+		const cruzada = redimensionar(CENTRO, 'r', { x: 350, y: 350 }, LIENZO);
+		expect(cruzada).toEqual({ x: 350, y: 300, ancho: 50, alto: 100 });
+
+		// Segundo movimiento en la misma dirección: el borde sigue al puntero.
+		const masLejos = redimensionar(CENTRO, 'r', { x: 340, y: 350 }, LIENZO);
+		expect(masLejos.x).toBe(340);
+		expect(masLejos.x + masLejos.ancho).toBe(PUNTO_FIJO.x);
+
+		// Y cambiando de dirección, también.
+		const devuelta = redimensionar(CENTRO, 'r', { x: 380, y: 350 }, LIENZO);
+		expect(devuelta.x).toBe(380);
+		expect(devuelta.x + devuelta.ancho).toBe(PUNTO_FIJO.x);
+	});
+
+	test('el ancla no se mueve', () => {
+		// Lo que el tirador no toca se queda donde está, venga el puntero de
+		// donde venga.
+		for (const x of [0, 100, 500, 1900]) {
+			const dada = redimensionar(CENTRO, 'l', { x, y: 0 }, LIENZO);
+			expect(dada.x + dada.ancho).toBe(Math.max(PUNTO_FIJO.x + CENTRO.ancho, x));
+			expect(dada.y).toBe(CENTRO.y);
+			expect(dada.alto).toBe(CENTRO.alto);
+		}
+	});
+
+	test('no se puede arrastrar un borde fuera de la pantalla', () => {
+		const afuera = redimensionar(CENTRO, 'br', { x: 99999, y: 99999 }, LIENZO);
+		expect(afuera.x + afuera.ancho).toBe(LIENZO.ancho);
+		expect(afuera.y + afuera.alto).toBe(LIENZO.alto);
+	});
+});
+
+describe('correr contra el borde, y volver', () => {
+	test('empujar contra el borde y volver deja la región donde estaba', () => {
+		// Con diferencias sucesivas el delta que el límite recortó se perdía, y
+		// la selección volvía corrida.
+		const origen = CENTRO;
+		const contra = correr(origen, -9999, 0, LIENZO);
+		expect(contra.x).toBe(0);
+		// Lo que hace el componente: siempre contra la región original.
+		expect(correr(origen, 0, 0, LIENZO)).toEqual(origen);
 	});
 });

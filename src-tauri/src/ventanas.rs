@@ -38,15 +38,33 @@ impl Ventana {
 }
 
 /// Un rectángulo de la respuesta, si es uno con medidas.
+///
+/// Viene en flotantes porque wayfire lleva la geometría en subpíxeles, y se
+/// redondea **hacia afuera**: el origen con `floor` y el borde opuesto con
+/// `ceil`, sacando las medidas de la diferencia. Redondear el ancho por su
+/// cuenta pierde un píxel del lado derecho cada vez que la parte decimal de la
+/// posición y la del ancho suman más de uno — y un píxel de menos en una
+/// captura de ventana es una franja del escritorio de atrás.
+///
+/// `floor` y no `as i32`, que trunca hacia cero: con una salida a la izquierda
+/// del origen las coordenadas son negativas.
 fn rectangulo(valor: &Value) -> Option<(i32, i32, i32, i32)> {
-    // Vienen como flotantes: wayfire los lleva en subpíxeles. `floor` y no `as
-    // i32`, que trunca hacia cero — con una salida a la izquierda del origen
-    // las coordenadas son negativas.
-    let x = valor.get("x")?.as_f64()?.floor() as i32;
-    let y = valor.get("y")?.as_f64()?.floor() as i32;
-    let ancho = valor.get("width")?.as_f64()?.floor() as i32;
-    let alto = valor.get("height")?.as_f64()?.floor() as i32;
-    (ancho > 0 && alto > 0).then_some((x, y, ancho, alto))
+    let x = valor.get("x")?.as_f64()?;
+    let y = valor.get("y")?.as_f64()?;
+    let ancho = valor.get("width")?.as_f64()?;
+    let alto = valor.get("height")?.as_f64()?;
+
+    let izquierda = x.floor() as i32;
+    let arriba = y.floor() as i32;
+    let derecha = (x + ancho).ceil() as i32;
+    let abajo = (y + alto).ceil() as i32;
+
+    (derecha > izquierda && abajo > arriba).then_some((
+        izquierda,
+        arriba,
+        derecha - izquierda,
+        abajo - arriba,
+    ))
 }
 
 /// Dónde empieza cada salida dentro del layout, por nombre.
@@ -102,11 +120,21 @@ pub fn de_las_respuestas(vistas: &Value, salidas: &Value) -> Vec<Ventana> {
         let Some((x, y, ancho, alto)) = vista.get("geometry").and_then(rectangulo) else {
             continue;
         };
-        let nombre = vista
+        // Sin saber dónde empieza su salida, la ventana **no entra**.
+        //
+        // Suponer el origen en cero parece más servicial y es peor: en un
+        // layout de varias pantallas amontona las ventanas de las otras sobre
+        // ésta, y ahí un clic elige un rectángulo que no tiene nada que ver
+        // con lo que se señaló. Una falla que se disfraza de funcionamiento es
+        // peor que una que se ve — y acá lo que se ve es que no se resalta
+        // nada y queda el arrastre, que es lo que había antes.
+        let Some(&(ox, oy)) = vista
             .get("output-name")
             .and_then(|n| n.as_str())
-            .unwrap_or("");
-        let (ox, oy) = origenes.get(nombre).copied().unwrap_or((0, 0));
+            .and_then(|nombre| origenes.get(nombre))
+        else {
+            continue;
+        };
 
         let foco = vista
             .get("last-focus-timestamp")
@@ -276,10 +304,42 @@ mod tests {
         assert!(
             de_las_respuestas(&serde_json::json!({"error": "no such method"}), &vacio).is_empty()
         );
+    }
+
+    #[test]
+    fn sin_saber_donde_empieza_su_salida_la_ventana_no_entra() {
+        // Suponer el origen en cero amontonaría las ventanas de las otras
+        // pantallas sobre ésta, y un clic elegiría un rectángulo que no tiene
+        // nada que ver con lo que se señaló.
         let (vistas, _) = respuestas();
-        // Sin las salidas se sigue contestando, con los orígenes en cero: es
-        // peor no poder señalar nada que señalar con una sola pantalla bien.
-        assert_eq!(de_las_respuestas(&vistas, &vacio).len(), 3);
+        assert!(de_las_respuestas(&vistas, &Value::Null).is_empty());
+
+        // Y con una sola salida conocida pasan sólo las suyas.
+        let una = serde_json::json!([
+            {"name": "HDMI-A-2", "geometry": {"x": 0.0, "y": 0.0, "width": 1920.0, "height": 1080.0}}
+        ]);
+        assert_eq!(de_las_respuestas(&vistas, &una).len(), 1);
+    }
+
+    #[test]
+    fn el_subpixel_se_redondea_hacia_afuera() {
+        // Redondear el ancho por su cuenta pierde un píxel del lado derecho, y
+        // un píxel de menos en una captura de ventana es una franja del
+        // escritorio de atrás.
+        let salidas = serde_json::json!([
+            {"name": "eDP-1", "geometry": {"x": 0.0, "y": 0.0, "width": 1920.0, "height": 1080.0}}
+        ]);
+        let vistas = serde_json::json!([
+            {"role": "toplevel", "mapped": true, "output-name": "eDP-1",
+             "geometry": {"x": 10.5, "y": 20.5, "width": 100.5, "height": 200.5},
+             "last-focus-timestamp": 1}
+        ]);
+        let ventanas = de_las_respuestas(&vistas, &salidas);
+        assert_eq!(ventanas[0].x, 10);
+        assert_eq!(ventanas[0].y, 20);
+        // 10,5 + 100,5 = 111, y el origen quedó en 10: el ancho es 101.
+        assert_eq!(ventanas[0].ancho, 101);
+        assert_eq!(ventanas[0].alto, 201);
     }
 
     /// La pantalla de abajo del layout de las pruebas.

@@ -14,11 +14,12 @@ Las capturas de pantalla de VasakOS.
 **Soltar el botón entrega la captura.** El gesto es uno solo: se arrastra sobre lo
 que se quiere y al levantar el dedo ya está. Qué es «entregar» lo decide la
 preferencia de abajo —sin tocar nada, guardar y copiar—, y con «esperar» soltar
-no entrega: congela la selección y deja decidir con los botones. Un clic sin
-arrastrar no entrega nada.
+no entrega: congela la selección y deja decidir con los botones.
 
 **Un clic sobre una ventana la captura entera.** Al pasar el puntero se resalta
-la que está debajo; el clic la elige con su borde exacto, sin encuadrarla a ojo.
+la que está debajo; el clic la elige con su borde exacto, sin encuadrarla a ojo,
+y entrega como cualquier otra selección. Un clic **fuera** de toda ventana no
+elige nada: tocar la pantalla sin querer no puede guardar la pantalla entera.
 
 El resto del selector sigue ahí para lo que no es un arrastre: **Intro** guarda y
 copia —y sin arrastrar nada captura la pantalla entera, que es el camino más corto

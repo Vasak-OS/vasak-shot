@@ -165,6 +165,46 @@ export function ajustar(
 }
 
 /**
+ * El rectángulo que resulta de llevar el borde de `rol` hasta `punto`.
+ *
+ * `region` es la de **cuando se agarró el tirador**, no la de recién, y el
+ * punto es el absoluto del puntero. Por eso y no por diferencias sucesivas,
+ * que es como estaba: acumular deltas tiene dos problemas que no se ven hasta
+ * que pasan.
+ *
+ * Uno, que al cruzar el borde opuesto la región se da vuelta pero el rol sigue
+ * nombrando el borde de antes, así que el siguiente movimiento agarra el que
+ * ahora está del otro lado y el puntero deja de arrastrar nada.
+ *
+ * Y dos, que un delta que el límite del lienzo recortó se pierde: empujar
+ * contra el borde y volver no deja la región donde estaba.
+ *
+ * Con el ancla fija las dos desaparecen solas — el borde arrastrado está
+ * siempre exactamente donde está el puntero.
+ */
+export function redimensionar(
+	region: Region,
+	rol: Rol,
+	punto: Punto,
+	lienzo: { ancho: number; alto: number }
+): Region {
+	const izquierda = rol.includes('l') ? punto.x : region.x;
+	const derecha = rol.includes('r') ? punto.x : region.x + region.ancho;
+	const arriba = rol.includes('t') ? punto.y : region.y;
+	const abajo = rol.includes('b') ? punto.y : region.y + region.alto;
+
+	return limitar(
+		{
+			x: Math.min(izquierda, derecha),
+			y: Math.min(arriba, abajo),
+			ancho: Math.abs(derecha - izquierda),
+			alto: Math.abs(abajo - arriba),
+		},
+		lienzo
+	);
+}
+
+/**
  * Corre la región entera sin cambiarle el tamaño.
  *
  * Contra el borde se **detiene**, no se achica: lo que se está haciendo es

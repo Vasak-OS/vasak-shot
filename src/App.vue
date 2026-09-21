@@ -31,6 +31,7 @@ import {
 	type Punto,
 	type Region,
 	type Rol,
+	redimensionar,
 	aEntregar as regionAEntregar,
 	regionEntre,
 } from '@/tools/region';
@@ -64,13 +65,18 @@ const seleccion = ref<Region | null>(null);
 const arrastre = ref<{ desde: Punto; hasta: Punto } | null>(null);
 
 /**
- * Lo que se está corrigiendo, y dónde estaba el puntero recién.
+ * Lo que se está corrigiendo: qué borde, y desde dónde.
+ *
+ * Se guarda la región y el punto de **cuando se agarró**, no los de recién. Con
+ * diferencias sucesivas, un delta que el borde del lienzo recortó se pierde
+ * —empujar contra el borde y volver no deja la selección donde estaba— y al
+ * cruzar el borde opuesto el rol queda nombrando el de antes.
  *
  * `mover` no es un tirador sino el interior de la selección, pero se arrastra
  * igual y se termina igual, así que va por el mismo camino en lugar de por un
  * tercer estado que habría que apagar en los mismos lugares.
  */
-const ajuste = ref<{ rol: Rol | 'mover'; ultimo: Punto } | null>(null);
+const ajuste = ref<{ rol: Rol | 'mover'; origen: Region; inicio: Punto } | null>(null);
 
 /** Dónde está el puntero, para la lupa y para saber qué ventana se señala. */
 const puntero = ref<Punto | null>(null);
@@ -147,12 +153,17 @@ function empezar(evento: MouseEvent) {
 	// botones, y una lista de etiquetas queda vieja en cuanto se agrega una.
 	if ((evento.target as HTMLElement).closest('[data-sin-arrastre]')) return;
 	const punto = puntoDe(evento);
+	// Se anota también acá y no sólo al mover: el selector aparece de golpe
+	// bajo un puntero que puede estar quieto, y entonces un clic sin moverlo
+	// llegaba a `terminar` sin saber dónde había caído — o sea sin poder elegir
+	// la ventana que estaba debajo.
+	puntero.value = punto;
 
 	// Adentro de lo ya elegido, arrastrar lo **mueve**. Empezar uno nuevo desde
 	// ahí sería no poder corregir la posición sin rehacer la selección entera,
 	// que es justamente lo que se quiso evitar.
 	if (seleccion.value && contiene(seleccion.value, punto)) {
-		ajuste.value = { rol: 'mover', ultimo: punto };
+		ajuste.value = { rol: 'mover', origen: seleccion.value, inicio: punto };
 		return;
 	}
 
@@ -165,7 +176,7 @@ function empezar(evento: MouseEvent) {
 /** Agarra un tirador. El arrastre lo sigue `mover`, como el de la región. */
 function tomarTirador(rol: Rol, evento: MouseEvent) {
 	if (!seleccion.value) return;
-	ajuste.value = { rol, ultimo: puntoDe(evento) };
+	ajuste.value = { rol, origen: seleccion.value, inicio: puntoDe(evento) };
 }
 
 function mover(evento: MouseEvent) {
@@ -173,19 +184,14 @@ function mover(evento: MouseEvent) {
 	puntero.value = punto;
 
 	if (ajuste.value) {
-		// Por diferencia contra el punto anterior y no contra el del principio:
-		// así el borde sigue al puntero aunque la región se haya dado vuelta o
-		// haya topado contra el borde del lienzo en el camino.
-		const { rol, ultimo } = ajuste.value;
-		const dx = punto.x - ultimo.x;
-		const dy = punto.y - ultimo.y;
-		if (seleccion.value) {
-			seleccion.value =
-				rol === 'mover'
-					? correr(seleccion.value, dx, dy, pantalla.value)
-					: ajustar(seleccion.value, rol, dx, dy, pantalla.value);
-		}
-		ajuste.value = { rol, ultimo: punto };
+		// Contra la región y el punto de cuando se agarró, no contra los de
+		// recién: así el borde arrastrado está siempre donde está el puntero,
+		// aunque la región se haya dado vuelta o haya topado con el borde.
+		const { rol, origen, inicio } = ajuste.value;
+		seleccion.value =
+			rol === 'mover'
+				? correr(origen, punto.x - inicio.x, punto.y - inicio.y, pantalla.value)
+				: redimensionar(origen, rol, punto, pantalla.value);
 		return;
 	}
 
