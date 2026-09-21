@@ -6,10 +6,19 @@
 //! sistema está en español deja las capturas en una carpeta que la persona no
 //! reconoce.
 
-use std::path::PathBuf;
+use crate::preferencias;
+use std::path::{Path, PathBuf};
 
 /// El nombre de la subcarpeta, dentro de la de imágenes.
-const SUBCARPETA: &str = "Capturas";
+const SUBCARPETA: &str = "ScreenShots";
+
+/// Cómo se llamaba antes.
+///
+/// No se renombra nada al actualizar: si la carpeta vieja tiene capturas
+/// adentro, se sigue guardando ahí. Cambiar el nombre por omisión no puede
+/// partir en dos lo que alguien ya guardó — quien quiera el nombre nuevo lo
+/// elige en las preferencias.
+const SUBCARPETA_ANTERIOR: &str = "Capturas";
 
 /// La carpeta de imágenes según `user-dirs.dirs`, dado su contenido.
 ///
@@ -34,19 +43,64 @@ pub fn imagenes_en_user_dirs(contenido: &str, home: &str) -> Option<PathBuf> {
     None
 }
 
-/// La carpeta donde se guardan las capturas, creándola si hace falta.
-pub fn carpeta() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|_| "no hay HOME".to_string())?;
-
-    let config = PathBuf::from(&home).join(".config").join("user-dirs.dirs");
-    let imagenes = std::fs::read_to_string(&config)
+/// La carpeta de imágenes de esta sesión.
+fn imagenes(home: &str) -> PathBuf {
+    // La carpeta de configuración por `dirs` y no `$HOME/.config` a mano: es la
+    // misma regla que ya aplica `preferencias`, y dos maneras de encontrar la
+    // misma carpeta son dos que se pueden separar el día que una sesión defina
+    // `XDG_CONFIG_HOME`.
+    let config = dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from(home).join(".config"))
+        .join("user-dirs.dirs");
+    std::fs::read_to_string(&config)
         .ok()
-        .and_then(|c| imagenes_en_user_dirs(&c, &home))
+        .and_then(|c| imagenes_en_user_dirs(&c, home))
         // Sin configuración, `Pictures` es lo que la especificación de XDG dice
         // por omisión.
-        .unwrap_or_else(|| PathBuf::from(&home).join("Pictures"));
+        .unwrap_or_else(|| PathBuf::from(home).join("Pictures"))
+}
 
-    let destino = imagenes.join(SUBCARPETA);
+/// Si una carpeta existe y tiene algo adentro.
+///
+/// Que exista no alcanza: una carpeta vacía la pudo dejar una versión anterior
+/// que arrancó y no guardó nada, y seguir usándola por eso sería conservar un
+/// nombre que a nadie le importa.
+fn tiene_algo(carpeta: &Path) -> bool {
+    std::fs::read_dir(carpeta).is_ok_and(|mut d| d.next().is_some())
+}
+
+/// La subcarpeta que corresponde, según si la anterior está en uso.
+///
+/// Aparte para poder probarlo: la decisión es de una línea y el error —mandar
+/// las capturas nuevas a un lugar distinto del que tiene las viejas— no se ve
+/// hasta que alguien busca una de la semana pasada.
+pub fn subcarpeta(anterior_en_uso: bool) -> &'static str {
+    if anterior_en_uso {
+        SUBCARPETA_ANTERIOR
+    } else {
+        SUBCARPETA
+    }
+}
+
+/// Dónde van las capturas, **sin crear nada**.
+///
+/// Sin crear porque el panel de preferencias la muestra, y mostrar una carpeta
+/// no puede ser motivo para crearla: abrir el panel y cerrarlo dejaría una
+/// carpeta vacía en las imágenes de cualquiera que sólo quiso mirar.
+pub fn carpeta_sin_crear() -> Result<PathBuf, String> {
+    if let Some(elegida) = preferencias::leer().carpeta {
+        return Ok(elegida);
+    }
+
+    let home = std::env::var("HOME").map_err(|_| "no hay HOME".to_string())?;
+    let imagenes = imagenes(&home);
+    let anterior = imagenes.join(SUBCARPETA_ANTERIOR);
+    Ok(imagenes.join(subcarpeta(tiene_algo(&anterior))))
+}
+
+/// La carpeta donde se guardan las capturas, creándola si hace falta.
+pub fn carpeta() -> Result<PathBuf, String> {
+    let destino = carpeta_sin_crear()?;
     std::fs::create_dir_all(&destino)
         .map_err(|e| format!("no se pudo crear {}: {e}", destino.display()))?;
     Ok(destino)
@@ -197,5 +251,35 @@ mod tests {
         // panic acá dejaría la captura tomada pero sin guardar.
         let (anio, _, _, _, _, _) = civil_desde_epoch(-86_400);
         assert_eq!(anio, 1969);
+    }
+
+    #[test]
+    fn la_subcarpeta_nueva_es_la_que_se_usa() {
+        assert_eq!(subcarpeta(false), "ScreenShots");
+    }
+
+    #[test]
+    fn con_capturas_viejas_se_sigue_en_la_carpeta_vieja() {
+        // Cambiar el nombre por omisión no puede dejar huérfano lo que alguien
+        // ya guardó: las capturas de la semana pasada y las de hoy tienen que
+        // estar en el mismo lugar.
+        assert_eq!(subcarpeta(true), "Capturas");
+    }
+
+    #[test]
+    fn una_carpeta_vacia_no_cuenta_como_en_uso() {
+        let base = std::env::temp_dir().join(format!("vasak-shot-destino-{}", std::process::id()));
+        let vacia = base.join("vacia");
+        let con_algo = base.join("con-algo");
+        std::fs::create_dir_all(&vacia).unwrap();
+        std::fs::create_dir_all(&con_algo).unwrap();
+        std::fs::write(con_algo.join("captura.png"), b"").unwrap();
+
+        assert!(!tiene_algo(&vacia));
+        assert!(tiene_algo(&con_algo));
+        // Y una que no existe tampoco, que es el caso de una instalación nueva.
+        assert!(!tiene_algo(&base.join("no-existe")));
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

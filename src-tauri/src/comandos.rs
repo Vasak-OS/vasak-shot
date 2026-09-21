@@ -2,6 +2,7 @@
 
 use crate::captura::{self, Region, Salida};
 use crate::destino;
+use crate::preferencias::{self as prefs, AlSoltar};
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
@@ -129,6 +130,71 @@ fn traducir(region: Region) -> Result<Region, String> {
     };
     let (salida, escala) = salida_y_escala(ancho, alto);
     Ok(region.en_la_captura(salida, escala))
+}
+
+/// Las preferencias, más la carpeta que de verdad se está usando.
+///
+/// Las dos cosas en una respuesta: el panel necesita mostrar adónde van las
+/// capturas ahora mismo, y eso no es la preferencia —que puede estar vacía— sino
+/// el resultado de resolverla. Preguntarlo por separado abriría la puerta a que
+/// una de las dos llegue vieja.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Ajustes {
+    pub al_soltar: AlSoltar,
+    /// La carpeta elegida a mano, o nula si no se eligió ninguna.
+    pub carpeta: Option<String>,
+    /// Dónde van las capturas ahora mismo, ya resuelto.
+    pub carpeta_efectiva: String,
+}
+
+/// Arma la respuesta del panel a partir de las preferencias dadas.
+fn ajustes_de(preferencias: prefs::Preferencias) -> Result<Ajustes, String> {
+    Ok(Ajustes {
+        al_soltar: preferencias.al_soltar,
+        carpeta: preferencias
+            .carpeta
+            .as_ref()
+            .map(|c| c.to_string_lossy().into_owned()),
+        carpeta_efectiva: destino::carpeta_sin_crear()?.to_string_lossy().into_owned(),
+    })
+}
+
+/// Lo que el panel de preferencias necesita para dibujarse.
+#[tauri::command]
+pub fn ajustes() -> Result<Ajustes, String> {
+    ajustes_de(prefs::leer())
+}
+
+/// Guarda las preferencias y devuelve cómo quedaron.
+///
+/// Devuelve en lugar de contestar que sí: la carpeta que se escribió no es
+/// necesariamente la que se guardó —`~` se expande, los espacios se recortan— y
+/// el panel tiene que mostrar lo que quedó, no lo que se tecleó.
+///
+/// La carpeta se **crea** acá, no al guardar la primera captura. Una ruta mal
+/// escrita tiene que fallar mientras el panel está abierto y se la puede
+/// corregir, no media hora después cuando lo que se quería era capturar algo.
+#[tauri::command]
+pub fn guardar_ajustes(al_soltar: AlSoltar, carpeta: Option<String>) -> Result<Ajustes, String> {
+    let home = std::env::var("HOME").map_err(|_| "no hay HOME".to_string())?;
+    let carpeta = match carpeta {
+        Some(bruta) => prefs::carpeta_escrita(&bruta, &home)?,
+        None => None,
+    };
+
+    if let Some(elegida) = carpeta.as_ref() {
+        std::fs::create_dir_all(elegida)
+            .map_err(|e| format!("no se pudo crear {}: {e}", elegida.display()))?;
+        // Que exista no alcanza: `create_dir_all` se conforma con una carpeta
+        // ajena o de sólo lectura, y ahí el problema saldría recién al guardar
+        // la primera captura, con el panel ya cerrado.
+        prefs::probar_escritura(elegida)?;
+    }
+
+    let preferencias = prefs::Preferencias { al_soltar, carpeta };
+    prefs::escribir(&preferencias)?;
+    ajustes_de(preferencias)
 }
 
 /// Recorta a la región elegida y devuelve el archivo final.

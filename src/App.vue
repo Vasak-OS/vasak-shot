@@ -11,7 +11,15 @@ import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useI18n } from '@vasakgroup/tauri-plugin-i18n';
 import { computed, onMounted, onUnmounted, ref } from 'vue';
+import PanelPreferencias from '@/components/PanelPreferencias.vue';
 import { interpolar } from '@/tools/interpolar';
+import {
+	type Ajustes,
+	type AlSoltar,
+	type Comando,
+	comandoAlSoltar,
+	POR_OMISION,
+} from '@/tools/preferencias';
 import { medidasDe, type Region, aEntregar as regionAEntregar, regionEntre } from '@/tools/region';
 
 interface Salida {
@@ -41,9 +49,35 @@ const error = ref('');
 const trabajando = ref(false);
 const aviso = ref('');
 
-/** Dónde empezó el arrastre, y dónde está ahora. Nulo si no se está arrastrando. */
+/** Dónde empezó el arrastre, y dónde está ahora. Nulo si no hay región elegida. */
 const desde = ref<{ x: number; y: number } | null>(null);
 const hasta = ref<{ x: number; y: number } | null>(null);
+
+/**
+ * Si el botón está apretado ahora mismo.
+ *
+ * Aparte de `desde`, y ahí está el asunto: `desde` sigue con valor **después**
+ * de soltar, porque la región elegida tiene que quedar dibujada. Mientras el
+ * arrastre se dedujo de que `desde` existiera, soltar no terminaba nada y el
+ * rectángulo seguía persiguiendo al puntero hasta que alguien volvía a apretar.
+ */
+const arrastrando = ref(false);
+
+/** Las preferencias, con las de siempre mientras el backend no conteste. */
+const ajustes = ref<Ajustes>(POR_OMISION);
+
+/**
+ * La lectura de las preferencias, mientras está en curso.
+ *
+ * Se guarda para poder esperarla al soltar. Sin eso, un arrastre que termina
+ * antes de que el backend conteste se entrega con los valores de siempre —o
+ * sea guardando— aunque la preferencia diga «copiar» o «esperar»: un archivo en
+ * el disco que nadie pidió. La ventana aparece de golpe y el gesto puede
+ * empezar en el primer cuadro.
+ */
+const cargando = ref<Promise<void> | null>(null);
+const panel = ref(false);
+const errorPanel = ref('');
 
 /**
  * La región elegida, en píxeles de la imagen.
@@ -69,30 +103,56 @@ const aEntregar = computed<Region | null>(() =>
 const medidas = computed(() => medidasDe(aEntregar.value));
 
 function empezar(evento: MouseEvent) {
-	if ((evento.target as HTMLElement).closest('button')) return;
+	// La barra y el panel no son lienzo. Se marcan con `data-sin-arrastre` en
+	// lugar de enumerar etiquetas: el panel tiene campos y etiquetas además de
+	// botones, y una lista de etiquetas queda vieja en cuanto se agrega una.
+	if ((evento.target as HTMLElement).closest('[data-sin-arrastre]')) return;
+	arrastrando.value = true;
 	desde.value = { x: evento.clientX, y: evento.clientY };
 	hasta.value = { x: evento.clientX, y: evento.clientY };
 }
 
 function mover(evento: MouseEvent) {
-	if (!desde.value) return;
+	if (!arrastrando.value) return;
 	hasta.value = { x: evento.clientX, y: evento.clientY };
 }
 
-function terminar() {
-	// El arrastre queda hecho; no se limpia `desde` porque la región elegida
-	// tiene que seguir visible para poder confirmarla.
+/**
+ * Soltar cierra la selección, y entrega.
+ *
+ * Las dos cosas, y en ese orden. Cerrarla es lo que hace que la región deje de
+ * seguir al puntero —el arrastre queda hecho y `desde` no se limpia, porque lo
+ * elegido tiene que seguir dibujado—. Entregar es el resto del gesto: se
+ * arrastra sobre lo que se quiere y al levantar el dedo la captura ya está.
+ *
+ * Con `esperar` no entrega nada y quedan los botones, que es lo que van a
+ * necesitar anotar y ajustar la selección.
+ */
+async function terminar() {
+	if (!arrastrando.value) return;
+	arrastrando.value = false;
+
 	if (region.value === null) {
+		// Un clic suelto no entrega: tocar la pantalla sin querer no puede
+		// guardar la pantalla entera.
 		desde.value = null;
 		hasta.value = null;
+		return;
 	}
+
+	// Las preferencias primero: entregar con las de siempre porque todavía no
+	// llegaron es escribir un archivo que la preferencia decía que no.
+	await cargando.value;
+
+	const comando = comandoAlSoltar(ajustes.value.alSoltar);
+	if (comando) void entregar(comando);
 }
 
 async function salir() {
 	await getCurrentWindow().close();
 }
 
-async function entregar(comando: 'guardar' | 'copiar' | 'guardar_y_copiar') {
+async function entregar(comando: Comando) {
 	const r = aEntregar.value;
 	if (!r || trabajando.value) return;
 	trabajando.value = true;
@@ -111,6 +171,14 @@ async function entregar(comando: 'guardar' | 'copiar' | 'guardar_y_copiar') {
 }
 
 function alTeclado(evento: KeyboardEvent) {
+	// Con el panel abierto se está escribiendo una ruta: Intro la aplica y
+	// Ctrl+C copia texto. Que el atajo de la ventana se los lleve significaría
+	// guardar una captura desde adentro de un campo de texto.
+	if (panel.value) {
+		if (evento.key === 'Escape') panel.value = false;
+		return;
+	}
+
 	if (evento.key === 'Escape') {
 		void salir();
 	} else if (evento.key === 'Enter') {
@@ -120,8 +188,35 @@ function alTeclado(evento: KeyboardEvent) {
 	}
 }
 
+/**
+ * Las preferencias, si se pueden leer.
+ *
+ * Que no se puedan **no** es un error que se muestre: quedan las de siempre y
+ * la captura sigue su camino. Lo contrario sería no poder capturar nada porque
+ * un archivo de configuración está roto.
+ */
+async function cargarAjustes() {
+	try {
+		ajustes.value = await invoke<Ajustes>('ajustes');
+	} catch (e) {
+		console.error('No se pudieron leer las preferencias', e);
+	}
+}
+
+async function guardarAjustes(alSoltar: AlSoltar, carpeta: string | null) {
+	errorPanel.value = '';
+	try {
+		// El backend devuelve cómo quedó: `~` expandido y espacios recortados no
+		// son lo que se tecleó, y el panel tiene que mostrar lo guardado.
+		ajustes.value = await invoke<Ajustes>('guardar_ajustes', { alSoltar, carpeta });
+	} catch (e) {
+		errorPanel.value = String(e);
+	}
+}
+
 onMounted(async () => {
 	window.addEventListener('keydown', alTeclado);
+	cargando.value = cargarAjustes();
 	try {
 		const l = await invoke<Lienzo>('lienzo');
 		lienzo.value = l;
@@ -192,7 +287,7 @@ const estilo = computed(() => {
 		:style="estiloFondo"
 		@mousedown="empezar"
 		@mousemove="mover"
-		@mouseup="terminar"
+		@mouseup="terminar()"
 	>
 		<!-- El velo se apaga en cuanto hay una selección: con los dos, la zona
 		     elegida quedaría oscurecida dos veces.
@@ -229,7 +324,16 @@ const estilo = computed(() => {
 			{{ aviso }}
 		</div>
 
+		<PanelPreferencias
+			v-if="panel"
+			:ajustes="ajustes"
+			:error="errorPanel"
+			@guardar="guardarAjustes"
+			@cerrar="panel = false"
+		/>
+
 		<div
+			data-sin-arrastre
 			class="absolute bottom-8 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-corner border border-ui-border bg-ui-bg/80 p-1.5"
 		>
 			<span class="px-2 font-mono text-tx-muted text-xs">{{ medidas }}</span>
@@ -261,6 +365,33 @@ const estilo = computed(() => {
 				{{ t('shot.cancelar') }}
 				<kbd class="ml-1 font-mono text-[10px] text-tx-muted">{{ t('shot.teclaCancelar') }}</kbd>
 			</button>
+			<span class="h-5 w-px bg-ui-border"></span>
+			<!-- La rueda dentada va dibujada acá y no por el resolvedor de
+			     iconos: el composable que lo hacía se sacó por no usarse, y
+			     traerlo de vuelta por un icono sería reabrir la copia. -->
+			<button
+				type="button"
+				class="rounded-corner p-1.5 text-tx-muted hover:bg-ui-surface"
+				:title="t('shot.preferencias')"
+				:aria-label="t('shot.preferencias')"
+				@click="panel = !panel"
+			>
+				<svg
+					class="size-4"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					aria-hidden="true"
+				>
+					<circle cx="12" cy="12" r="3" />
+					<path
+						d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
+					/>
+				</svg>
+			</button>
 		</div>
 
 		<!-- Con fondo propio, no suelto sobre la imagen: el cuadro congelado puede
@@ -268,7 +399,7 @@ const estilo = computed(() => {
 		     un respaldo la instrucción quedaba ilegible justo cuando más se
 		     necesita, que es la primera vez que alguien abre esto. -->
 		<p
-			v-if="!region"
+			v-if="!region && !panel"
 			class="-translate-x-1/2 -translate-y-1/2 absolute top-1/2 left-1/2 rounded-corner border border-ui-border bg-ui-bg/80 px-4 py-2 text-sm text-tx-main"
 		>
 			{{ t('shot.instruccion') }}

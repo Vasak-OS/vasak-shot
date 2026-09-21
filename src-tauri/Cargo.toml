@@ -1,6 +1,6 @@
 [package]
 name = "vasak-shot"
-version = "0.2.8"
+version = "0.3.0"
 description = "Capturas de pantalla de VasakOS"
 authors = ["Vasak Group", "Joaquin (Pato) Decima"]
 edition = "2021"
@@ -41,6 +41,11 @@ gtk-layer-shell = "0.8"
 # Recortar la captura. Sólo PNG: es lo que da `grim` y lo que se guarda, así que
 # no hace falta arrastrar los decodificadores de todo lo demás.
 image = { version = "0.25", default-features = false, features = ["png"] }
+
+# La carpeta de configuración, con la regla de que una ruta XDG relativa se
+# ignora ya escrita adentro. Es dependencia directa en media docena de
+# repositorios del taller: escribirla de nuevo acá es garantizar que se separen.
+dirs = "6"
 tauri-plugin-vsk-journal = "2"
 wayland-client = "0.31"
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }

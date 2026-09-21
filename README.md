@@ -11,13 +11,38 @@ Las capturas de pantalla de VasakOS.
 | `vasak-shot` | Lo mismo que la tecla: abre el selector |
 | `vasak-shot --pantalla` | Guarda y copia toda la pantalla, imprime la ruta y sale |
 
-En el selector: **Intro** guarda y copia, **Ctrl+C** copia sin guardar, **Esc**
-cancela. Sin arrastrar nada, Intro captura la pantalla entera — es el camino más
-corto para el caso más común.
+**Soltar el botón entrega la captura.** El gesto es uno solo: se arrastra sobre lo
+que se quiere y al levantar el dedo ya está. Qué es «entregar» lo decide la
+preferencia de abajo —sin tocar nada, guardar y copiar—, y con «esperar» soltar
+no entrega: congela la selección y deja decidir con los botones. Un clic sin
+arrastrar no entrega nada.
 
-Las capturas van a `~/Imágenes/Capturas`, o el equivalente en el idioma de la
-instalación: la carpeta la elige `user-dirs.dirs`, y no es «Pictures» en todas las
-máquinas.
+El resto del selector sigue ahí para lo que no es un arrastre: **Intro** guarda y
+copia —y sin arrastrar nada captura la pantalla entera, que es el camino más corto
+para el caso más común—, **Ctrl+C** copia sin guardar, **Esc** cancela.
+
+## Preferencias
+
+La rueda dentada de la barra abre dos cosas:
+
+- **Qué hace soltar el botón**: guardar y copiar (lo de siempre), sólo guardar,
+  sólo copiar, o **esperar** y decidir con los botones. La última es la que va a
+  hacer falta cuando se pueda anotar la captura o ajustar la selección, porque las
+  dos cosas pasan después de soltar.
+- **En qué carpeta se guarda.** Se escribe a mano: el selector es una superficie
+  de capa que tapa todo, y un diálogo de sistema lanzado desde ahí aparece detrás
+  o no aparece. Abajo del campo está siempre a la vista dónde van a ir a parar las
+  capturas ahora mismo.
+
+Las preferencias viven en `~/.config/vasak-shot/preferencias.json`. Un archivo que
+no está o que está roto **no** es un error: quedan los valores de siempre y la
+captura sigue su camino.
+
+Sin elegir carpeta, las capturas van a `~/Imágenes/ScreenShots`, o el equivalente
+en el idioma de la instalación: la carpeta madre la elige `user-dirs.dirs`, y no es
+«Pictures» en todas las máquinas. **Si ya había capturas en la carpeta anterior
+—`Capturas`— se sigue guardando ahí**: cambiar el nombre por omisión no puede
+partir en dos lo que alguien ya tenía guardado.
 
 ## El orden importa, y es al revés de lo que parece
 
