@@ -20,3 +20,13 @@ shot:
   teclaCopiar: Ctrl+C
   teclaGuardar: Enter
   teclaCancelar: Esc
+  preferencias: Preferences
+  cerrar: Close
+  aplicar: Apply
+  restablecer: Default
+  alSoltarTitulo: On releasing the button
+  alSoltarGuardarYCopiar: Save and copy
+  alSoltarGuardar: Save
+  alSoltarCopiar: Copy to the clipboard
+  alSoltarEsperar: Wait, and decide with the buttons
+  carpeta: Folder to save into

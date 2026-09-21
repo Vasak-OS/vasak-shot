@@ -30,3 +30,13 @@ shot:
   teclaCopiar: Ctrl+C
   teclaGuardar: Intro
   teclaCancelar: Esc
+  preferencias: Preferencias
+  cerrar: Cerrar
+  aplicar: Aplicar
+  restablecer: Por omisión
+  alSoltarTitulo: Al soltar el botón
+  alSoltarGuardarYCopiar: Guardar y copiar
+  alSoltarGuardar: Guardar
+  alSoltarCopiar: Copiar al portapapeles
+  alSoltarEsperar: Esperar, y decidir con los botones
+  carpeta: Carpeta donde se guardan

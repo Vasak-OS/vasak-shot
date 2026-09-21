@@ -18,6 +18,7 @@ pub mod comandos;
 pub mod destino;
 mod locales;
 pub mod pantalla;
+pub mod preferencias;
 
 use captura::Salida;
 use gtk::prelude::*;
@@ -326,6 +327,8 @@ pub fn run() {
             comandos::guardar,
             comandos::copiar,
             comandos::guardar_y_copiar,
+            comandos::ajustes,
+            comandos::guardar_ajustes,
         ])
         .setup(|app| {
             // El layer-shell tiene que correr en el hilo principal —GTK aborta
