@@ -186,6 +186,10 @@ pub fn guardar_ajustes(al_soltar: AlSoltar, carpeta: Option<String>) -> Result<A
     if let Some(elegida) = carpeta.as_ref() {
         std::fs::create_dir_all(elegida)
             .map_err(|e| format!("no se pudo crear {}: {e}", elegida.display()))?;
+        // Que exista no alcanza: `create_dir_all` se conforma con una carpeta
+        // ajena o de sólo lectura, y ahí el problema saldría recién al guardar
+        // la primera captura, con el panel ya cerrado.
+        prefs::probar_escritura(elegida)?;
     }
 
     let preferencias = prefs::Preferencias { al_soltar, carpeta };

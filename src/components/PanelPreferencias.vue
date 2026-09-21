@@ -28,26 +28,37 @@ const emitir = defineEmits<{
  */
 const escrita = ref(props.ajustes.carpeta ?? '');
 
+/** Si lo que hay en el campo todavía no se aplicó. */
+const sinAplicar = ref(false);
+
 // Al guardar, el backend devuelve cómo quedó —`~` expandido, espacios
 // recortados—, y el campo tiene que mostrar eso y no lo que se tecleó.
+//
+// **Salvo que se esté escribiendo.** Elegir una acción también guarda, y esa
+// respuesta trae la carpeta: sin esta guarda, tocar una opción a mitad de
+// escribir una ruta borraba lo tecleado sin que nadie lo hubiera pedido.
 watch(
 	() => props.ajustes.carpeta,
 	(carpeta) => {
+		if (sinAplicar.value) return;
 		escrita.value = carpeta ?? '';
 	}
 );
 
 function elegir(accion: AlSoltar) {
 	// Un clic en una opción es una decisión tomada: se guarda sola. La carpeta
-	// no, porque a mitad de escribir una ruta no hay ninguna decisión todavía.
+	// no, porque a mitad de escribir una ruta no hay ninguna decisión todavía —
+	// por eso viaja la guardada y no la del campo.
 	emitir('guardar', accion, props.ajustes.carpeta);
 }
 
 function aplicarCarpeta() {
+	sinAplicar.value = false;
 	emitir('guardar', props.ajustes.alSoltar, escrita.value);
 }
 
 function restablecerCarpeta() {
+	sinAplicar.value = false;
 	escrita.value = '';
 	emitir('guardar', props.ajustes.alSoltar, null);
 }
@@ -102,6 +113,7 @@ function restablecerCarpeta() {
 					spellcheck="false"
 					class="min-w-0 flex-1 rounded-corner border border-ui-border bg-ui-bg px-2 py-1 font-mono text-xs"
 					:placeholder="props.ajustes.carpetaEfectiva"
+					@input="sinAplicar = true"
 					@keydown.enter.prevent="aplicarCarpeta()"
 				/>
 				<button

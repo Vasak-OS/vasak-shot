@@ -65,6 +65,17 @@ const arrastrando = ref(false);
 
 /** Las preferencias, con las de siempre mientras el backend no conteste. */
 const ajustes = ref<Ajustes>(POR_OMISION);
+
+/**
+ * La lectura de las preferencias, mientras está en curso.
+ *
+ * Se guarda para poder esperarla al soltar. Sin eso, un arrastre que termina
+ * antes de que el backend conteste se entrega con los valores de siempre —o
+ * sea guardando— aunque la preferencia diga «copiar» o «esperar»: un archivo en
+ * el disco que nadie pidió. La ventana aparece de golpe y el gesto puede
+ * empezar en el primer cuadro.
+ */
+const cargando = ref<Promise<void> | null>(null);
 const panel = ref(false);
 const errorPanel = ref('');
 
@@ -117,7 +128,7 @@ function mover(evento: MouseEvent) {
  * Con `esperar` no entrega nada y quedan los botones, que es lo que van a
  * necesitar anotar y ajustar la selección.
  */
-function terminar() {
+async function terminar() {
 	if (!arrastrando.value) return;
 	arrastrando.value = false;
 
@@ -128,6 +139,10 @@ function terminar() {
 		hasta.value = null;
 		return;
 	}
+
+	// Las preferencias primero: entregar con las de siempre porque todavía no
+	// llegaron es escribir un archivo que la preferencia decía que no.
+	await cargando.value;
 
 	const comando = comandoAlSoltar(ajustes.value.alSoltar);
 	if (comando) void entregar(comando);
@@ -201,7 +216,7 @@ async function guardarAjustes(alSoltar: AlSoltar, carpeta: string | null) {
 
 onMounted(async () => {
 	window.addEventListener('keydown', alTeclado);
-	void cargarAjustes();
+	cargando.value = cargarAjustes();
 	try {
 		const l = await invoke<Lienzo>('lienzo');
 		lienzo.value = l;
@@ -272,7 +287,7 @@ const estilo = computed(() => {
 		:style="estiloFondo"
 		@mousedown="empezar"
 		@mousemove="mover"
-		@mouseup="terminar"
+		@mouseup="terminar()"
 	>
 		<!-- El velo se apaga en cuanto hay una selección: con los dos, la zona
 		     elegida quedaría oscurecida dos veces.

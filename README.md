@@ -12,7 +12,9 @@ Las capturas de pantalla de VasakOS.
 | `vasak-shot --pantalla` | Guarda y copia toda la pantalla, imprime la ruta y sale |
 
 **Soltar el botón entrega la captura.** El gesto es uno solo: se arrastra sobre lo
-que se quiere y al levantar el dedo ya está guardada y copiada. Un clic sin
+que se quiere y al levantar el dedo ya está. Qué es «entregar» lo decide la
+preferencia de abajo —sin tocar nada, guardar y copiar—, y con «esperar» soltar
+no entrega: congela la selección y deja decidir con los botones. Un clic sin
 arrastrar no entrega nada.
 
 El resto del selector sigue ahí para lo que no es un arrastre: **Intro** guarda y
