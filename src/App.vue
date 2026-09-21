@@ -11,8 +11,11 @@ import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useI18n } from '@vasakgroup/tauri-plugin-i18n';
 import { computed, onMounted, onUnmounted, ref } from 'vue';
+import Lupa from '@/components/Lupa.vue';
 import PanelPreferencias from '@/components/PanelPreferencias.vue';
+import Tiradores from '@/components/Tiradores.vue';
 import { interpolar } from '@/tools/interpolar';
+import { type Lienzo, medidaEnCss } from '@/tools/lienzo';
 import {
 	type Ajustes,
 	type AlSoltar,
@@ -20,26 +23,18 @@ import {
 	comandoAlSoltar,
 	POR_OMISION,
 } from '@/tools/preferencias';
-import { medidasDe, type Region, aEntregar as regionAEntregar, regionEntre } from '@/tools/region';
-
-interface Salida {
-	x: number;
-	y: number;
-	ancho: number;
-	alto: number;
-}
-
-interface Lienzo {
-	ruta: string;
-	/** El tamaño de la captura entera, con todas las salidas. */
-	ancho: number;
-	alto: number;
-	/** La salida que esta ventana está tapando, en unidades del layout. */
-	salida: Salida;
-	/** Píxeles de la captura por unidad del layout, por eje. */
-	escalaX: number;
-	escalaY: number;
-}
+import {
+	ajustar,
+	contiene,
+	correr,
+	medidasDe,
+	type Punto,
+	type Region,
+	type Rol,
+	aEntregar as regionAEntregar,
+	regionEntre,
+} from '@/tools/region';
+import { comoRegion, type Ventana, ventanaEn } from '@/tools/ventanas';
 
 const { t } = useI18n();
 
@@ -49,19 +44,39 @@ const error = ref('');
 const trabajando = ref(false);
 const aviso = ref('');
 
-/** Dónde empezó el arrastre, y dónde está ahora. Nulo si no hay región elegida. */
-const desde = ref<{ x: number; y: number } | null>(null);
-const hasta = ref<{ x: number; y: number } | null>(null);
+/**
+ * Lo elegido, en píxeles CSS de esta pantalla.
+ *
+ * Un `ref` y no algo calculado del arrastre, que es lo que era. El arrastre
+ * dejó de ser la única manera de elegir: ahora también se señala una ventana y
+ * se corrigen los bordes después, y con la región deducida del gesto no había
+ * dónde anotar el resultado de esas dos.
+ */
+const seleccion = ref<Region | null>(null);
 
 /**
- * Si el botón está apretado ahora mismo.
+ * El arrastre en curso, si lo hay.
  *
- * Aparte de `desde`, y ahí está el asunto: `desde` sigue con valor **después**
- * de soltar, porque la región elegida tiene que quedar dibujada. Mientras el
- * arrastre se dedujo de que `desde` existiera, soltar no terminaba nada y el
- * rectángulo seguía persiguiendo al puntero hasta que alguien volvía a apretar.
+ * Tener el gesto en su propia variable es lo que hace que soltar termine: antes
+ * se deducía de que hubiera un punto de partida, y ése sigue existiendo después
+ * de soltar porque lo elegido tiene que quedar dibujado.
  */
-const arrastrando = ref(false);
+const arrastre = ref<{ desde: Punto; hasta: Punto } | null>(null);
+
+/**
+ * Lo que se está corrigiendo, y dónde estaba el puntero recién.
+ *
+ * `mover` no es un tirador sino el interior de la selección, pero se arrastra
+ * igual y se termina igual, así que va por el mismo camino en lugar de por un
+ * tercer estado que habría que apagar en los mismos lugares.
+ */
+const ajuste = ref<{ rol: Rol | 'mover'; ultimo: Punto } | null>(null);
+
+/** Dónde está el puntero, para la lupa y para saber qué ventana se señala. */
+const puntero = ref<Punto | null>(null);
+
+/** Las ventanas que había cuando se tomó la captura. Vacía si no se pudo saber. */
+const ventanas = ref<Ventana[]>([]);
 
 /** Las preferencias, con las de siempre mientras el backend no conteste. */
 const ajustes = ref<Ajustes>(POR_OMISION);
@@ -79,15 +94,34 @@ const cargando = ref<Promise<void> | null>(null);
 const panel = ref(false);
 const errorPanel = ref('');
 
+/** El tamaño de esta pantalla, que es el límite de todo lo que se puede elegir. */
+const pantalla = computed(() => lienzo.value?.salida ?? { ancho: 0, alto: 0 });
+
 /**
- * La región elegida, en píxeles de la imagen.
+ * La ventana que se está señalando, si es que se está señalando alguna.
  *
- * Se normaliza acá además de en Rust: el rectángulo que se dibuja tiene que
- * seguir al puntero en cualquier dirección, y con medidas negativas el CSS no
- * dibuja nada. La normalización de Rust es la que protege el recorte; esta, lo
- * que se ve.
+ * Sólo mientras no haya nada elegido ni nada en curso: una vez que hay región,
+ * el recuadro de una ventana atrás sería ruido sobre lo que se está por
+ * ajustar.
  */
-const region = computed<Region | null>(() => regionEntre(desde.value, hasta.value));
+const resaltada = computed<Ventana | null>(() => {
+	if (seleccion.value || arrastre.value || ajuste.value || panel.value) return null;
+	return ventanaEn(ventanas.value, puntero.value);
+});
+
+/**
+ * Si la lupa se muestra.
+ *
+ * Mientras se elige y mientras se corrige, que es cuando el píxel exacto
+ * importa. No sobre una ventana señalada —ahí el rectángulo lo pone el
+ * compositor, no la mano— ni sobre una región ya elegida y quieta.
+ */
+const conLupa = computed(
+	() =>
+		!panel.value &&
+		puntero.value !== null &&
+		(arrastre.value !== null || ajuste.value !== null || (!seleccion.value && !resaltada.value))
+);
 
 /**
  * La región que se va a entregar: la elegida, o toda **esta** pantalla si no hay.
@@ -97,47 +131,99 @@ const region = computed<Region | null>(() => regionEntre(desde.value, hasta.valu
  * composición pediría un rectángulo que no existe acá. Rust lo traduce después.
  */
 const aEntregar = computed<Region | null>(() =>
-	regionAEntregar(region.value, lienzo.value?.salida ?? null)
+	regionAEntregar(seleccion.value, lienzo.value?.salida ?? null)
 );
 
 const medidas = computed(() => medidasDe(aEntregar.value));
+
+/** Dónde cayó el evento, en píxeles CSS de esta pantalla. */
+function puntoDe(evento: MouseEvent): Punto {
+	return { x: evento.clientX, y: evento.clientY };
+}
 
 function empezar(evento: MouseEvent) {
 	// La barra y el panel no son lienzo. Se marcan con `data-sin-arrastre` en
 	// lugar de enumerar etiquetas: el panel tiene campos y etiquetas además de
 	// botones, y una lista de etiquetas queda vieja en cuanto se agrega una.
 	if ((evento.target as HTMLElement).closest('[data-sin-arrastre]')) return;
-	arrastrando.value = true;
-	desde.value = { x: evento.clientX, y: evento.clientY };
-	hasta.value = { x: evento.clientX, y: evento.clientY };
+	const punto = puntoDe(evento);
+
+	// Adentro de lo ya elegido, arrastrar lo **mueve**. Empezar uno nuevo desde
+	// ahí sería no poder corregir la posición sin rehacer la selección entera,
+	// que es justamente lo que se quiso evitar.
+	if (seleccion.value && contiene(seleccion.value, punto)) {
+		ajuste.value = { rol: 'mover', ultimo: punto };
+		return;
+	}
+
+	arrastre.value = { desde: punto, hasta: punto };
+	// Empezar un arrastre nuevo descarta lo anterior: si no, el rectángulo
+	// viejo quedaría dibujado mientras se elige otro.
+	seleccion.value = null;
+}
+
+/** Agarra un tirador. El arrastre lo sigue `mover`, como el de la región. */
+function tomarTirador(rol: Rol, evento: MouseEvent) {
+	if (!seleccion.value) return;
+	ajuste.value = { rol, ultimo: puntoDe(evento) };
 }
 
 function mover(evento: MouseEvent) {
-	if (!arrastrando.value) return;
-	hasta.value = { x: evento.clientX, y: evento.clientY };
+	const punto = puntoDe(evento);
+	puntero.value = punto;
+
+	if (ajuste.value) {
+		// Por diferencia contra el punto anterior y no contra el del principio:
+		// así el borde sigue al puntero aunque la región se haya dado vuelta o
+		// haya topado contra el borde del lienzo en el camino.
+		const { rol, ultimo } = ajuste.value;
+		const dx = punto.x - ultimo.x;
+		const dy = punto.y - ultimo.y;
+		if (seleccion.value) {
+			seleccion.value =
+				rol === 'mover'
+					? correr(seleccion.value, dx, dy, pantalla.value)
+					: ajustar(seleccion.value, rol, dx, dy, pantalla.value);
+		}
+		ajuste.value = { rol, ultimo: punto };
+		return;
+	}
+
+	if (!arrastre.value) return;
+	arrastre.value = { desde: arrastre.value.desde, hasta: punto };
+	seleccion.value = regionEntre(arrastre.value.desde, punto);
 }
 
 /**
- * Soltar cierra la selección, y entrega.
+ * Soltar cierra el gesto, y entrega.
  *
- * Las dos cosas, y en ese orden. Cerrarla es lo que hace que la región deje de
- * seguir al puntero —el arrastre queda hecho y `desde` no se limpia, porque lo
- * elegido tiene que seguir dibujado—. Entregar es el resto del gesto: se
- * arrastra sobre lo que se quiere y al levantar el dedo la captura ya está.
+ * Las dos cosas, y en ese orden. Cerrarlo es lo que hace que la región deje de
+ * seguir al puntero. Entregar es el resto: se arrastra sobre lo que se quiere y
+ * al levantar el dedo la captura ya está.
  *
- * Con `esperar` no entrega nada y quedan los botones, que es lo que van a
- * necesitar anotar y ajustar la selección.
+ * **Corregir un borde no entrega.** Quien está moviendo un tirador está
+ * corrigiendo lo que eligió, y entregar ahí sería no dejarlo terminar — que es
+ * justamente lo que los tiradores vinieron a permitir. De todos modos sólo se
+ * llega a ellos con «esperar», que es la preferencia que no entrega al soltar.
+ *
+ * Y con `esperar` no entrega nada tampoco acá: quedan los botones.
  */
 async function terminar() {
-	if (!arrastrando.value) return;
-	arrastrando.value = false;
-
-	if (region.value === null) {
-		// Un clic suelto no entrega: tocar la pantalla sin querer no puede
-		// guardar la pantalla entera.
-		desde.value = null;
-		hasta.value = null;
+	if (ajuste.value) {
+		ajuste.value = null;
 		return;
+	}
+
+	if (!arrastre.value) return;
+	arrastre.value = null;
+
+	if (seleccion.value === null) {
+		// Sin arrastre, lo que vale es lo que se estaba señalando. Un clic sobre
+		// una ventana la elige entera, que es la manera de agarrar su borde
+		// exacto sin encuadrarla a ojo.
+		const ventana = ventanaEn(ventanas.value, puntero.value);
+		if (!ventana) return;
+		seleccion.value = comoRegion(ventana);
 	}
 
 	// Las preferencias primero: entregar con las de siempre porque todavía no
@@ -179,6 +265,8 @@ function alTeclado(evento: KeyboardEvent) {
 		return;
 	}
 
+	if (conFlechas(evento)) return;
+
 	if (evento.key === 'Escape') {
 		void salir();
 	} else if (evento.key === 'Enter') {
@@ -188,6 +276,41 @@ function alTeclado(evento: KeyboardEvent) {
 	}
 }
 
+/** Cuánto se mueve de un tecleo. Diez con Mayús, para cruzar la pantalla. */
+const PASO = 1;
+const PASO_LARGO = 10;
+
+/**
+ * Las flechas corrigen la selección: el único camino que llega al píxel exacto.
+ *
+ * Con `Ctrl` mueven el borde de abajo a la derecha en lugar de la región
+ * entera, o sea redimensionan. Es la combinación que queda libre: `Ctrl+C` ya
+ * copia, y `Alt` se lo lleva el compositor.
+ *
+ * Devuelve si la tecla era suya, para que quien llama no siga buscándole otro
+ * significado.
+ */
+function conFlechas(evento: KeyboardEvent): boolean {
+	const ejes: Record<string, Punto> = {
+		ArrowLeft: { x: -1, y: 0 },
+		ArrowRight: { x: 1, y: 0 },
+		ArrowUp: { x: 0, y: -1 },
+		ArrowDown: { x: 0, y: 1 },
+	};
+	const eje = ejes[evento.key];
+	if (!eje || !seleccion.value) return false;
+
+	evento.preventDefault();
+	const paso = evento.shiftKey ? PASO_LARGO : PASO;
+	const dx = eje.x * paso;
+	const dy = eje.y * paso;
+
+	seleccion.value = evento.ctrlKey
+		? ajustar(seleccion.value, 'br', dx, dy, pantalla.value)
+		: correr(seleccion.value, dx, dy, pantalla.value);
+	return true;
+}
+
 /**
  * Las preferencias, si se pueden leer.
  *
@@ -195,6 +318,14 @@ function alTeclado(evento: KeyboardEvent) {
  * la captura sigue su camino. Lo contrario sería no poder capturar nada porque
  * un archivo de configuración está roto.
  */
+async function cargarVentanas() {
+	try {
+		ventanas.value = await invoke<Ventana[]>('ventanas');
+	} catch (e) {
+		console.error('No se pudo saber dónde están las ventanas', e);
+	}
+}
+
 async function cargarAjustes() {
 	try {
 		ajustes.value = await invoke<Ajustes>('ajustes');
@@ -217,6 +348,9 @@ async function guardarAjustes(alSoltar: AlSoltar, carpeta: string | null) {
 onMounted(async () => {
 	window.addEventListener('keydown', alTeclado);
 	cargando.value = cargarAjustes();
+	// Sin esperarla: que no se pueda saber dónde están las ventanas no puede
+	// demorar el arrastre, que es lo que funciona sin ellas.
+	void cargarVentanas();
 	try {
 		const l = await invoke<Lienzo>('lienzo');
 		lienzo.value = l;
@@ -263,14 +397,14 @@ const estiloFondo = computed(() => {
 	if (!fondo.value || !l) return {};
 	return {
 		backgroundImage: `url(${fondo.value})`,
-		backgroundSize: `${l.ancho / l.escalaX}px ${l.alto / l.escalaY}px`,
+		backgroundSize: `${medidaEnCss(l).ancho}px ${medidaEnCss(l).alto}px`,
 		backgroundPosition: `${-l.salida.x}px ${-l.salida.y}px`,
 		backgroundRepeat: 'no-repeat',
 	};
 });
 
 const estilo = computed(() => {
-	const r = region.value;
+	const r = seleccion.value;
 	if (!r) return { display: 'none' };
 	return {
 		left: `${r.x}px`,
@@ -288,19 +422,41 @@ const estilo = computed(() => {
 		@mousedown="empezar"
 		@mousemove="mover"
 		@mouseup="terminar()"
+		@mouseleave="puntero = null"
 	>
 		<!-- El velo se apaga en cuanto hay una selección: con los dos, la zona
 		     elegida quedaría oscurecida dos veces.
 		     Negro y no un color del tema: no es una superficie de la interfaz
 		     sino una atenuación sobre la captura, y tiene que oscurecer igual con
 		     el tema claro. -->
-		<div v-if="!region" class="absolute inset-0 bg-black/55"></div>
+		<div v-if="!seleccion" class="absolute inset-0 bg-black/55"></div>
+
+		<!-- La ventana que se está señalando. Es el mismo recuadro que la
+		     selección pero sin tiradores: todavía no se eligió nada, se está
+		     mostrando qué pasaría al hacer clic. -->
+		<div
+			v-if="resaltada"
+			class="absolute rounded-corner border-2 border-primary bg-primary/10"
+			:style="{
+				left: `${resaltada.x}px`,
+				top: `${resaltada.y}px`,
+				width: `${resaltada.ancho}px`,
+				height: `${resaltada.alto}px`,
+			}"
+		>
+			<span
+				class="-top-7 absolute left-0 whitespace-nowrap rounded-corner bg-primary px-2 py-0.5 font-mono text-tx-on-primary text-xs"
+			>
+				{{ resaltada.ancho }} × {{ resaltada.alto }}
+			</span>
+		</div>
 
 		<!-- El recorte de la selección se hace con una sombra enorme en lugar de
 		     cuatro divs: así el borde queda pegado al rectángulo sin cuentas. -->
 		<div
-			v-if="region"
+			v-if="seleccion"
 			class="absolute rounded-corner border border-primary shadow-[0_0_0_9999px_rgba(0,0,0,0.55)]"
+			:class="arrastre ? '' : 'cursor-move'"
 			:style="estilo"
 		>
 			<span
@@ -308,7 +464,14 @@ const estilo = computed(() => {
 			>
 				{{ medidas }}
 			</span>
+
+			<!-- Los tiradores, sólo con el gesto terminado: mientras se
+			     arrastra la región ya sigue al puntero y ocho puntos moviéndose
+			     con ella son ruido. -->
+			<Tiradores v-if="!arrastre" @tomar="tomarTirador" />
 		</div>
+
+		<Lupa v-if="conLupa && puntero && lienzo" :punto="puntero" :lienzo="lienzo" :fondo="fondo" />
 
 		<div
 			v-if="error"
@@ -399,10 +562,10 @@ const estilo = computed(() => {
 		     un respaldo la instrucción quedaba ilegible justo cuando más se
 		     necesita, que es la primera vez que alguien abre esto. -->
 		<p
-			v-if="!region && !panel"
+			v-if="!seleccion && !panel"
 			class="-translate-x-1/2 -translate-y-1/2 absolute top-1/2 left-1/2 rounded-corner border border-ui-border bg-ui-bg/80 px-4 py-2 text-sm text-tx-main"
 		>
-			{{ t('shot.instruccion') }}
+			{{ ventanas.length ? t('shot.instruccionConVentanas') : t('shot.instruccion') }}
 		</p>
 	</main>
 </template>

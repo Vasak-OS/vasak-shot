@@ -72,3 +72,117 @@ export function aEntregar(
 export function medidasDe(region: Region | null): string {
 	return region ? `${region.ancho} × ${region.alto}` : '';
 }
+
+/** Un tirador: qué bordes mueve. */
+export type Rol = 'tl' | 't' | 'tr' | 'r' | 'br' | 'b' | 'bl' | 'l';
+
+/**
+ * Los ocho, en el orden de las agujas del reloj desde arriba a la izquierda.
+ *
+ * Las letras son las iniciales en inglés —`top`, `bottom`, `left`, `right`—
+ * porque son cuatro distintas y eso deja preguntar por una con `includes`: `tl`
+ * mueve el de arriba y el de la izquierda sin que haga falta una tabla.
+ */
+export const ROLES: Rol[] = ['tl', 't', 'tr', 'r', 'br', 'b', 'bl', 'l'];
+
+/**
+ * Si el punto cae adentro de la región.
+ *
+ * El borde de abajo y el de la derecha quedan afuera, igual que en las
+ * ventanas: una región pegada a otra no puede contener las dos su línea de
+ * contacto.
+ */
+export function contiene(region: Region, punto: Punto): boolean {
+	return (
+		punto.x >= region.x &&
+		punto.x < region.x + region.ancho &&
+		punto.y >= region.y &&
+		punto.y < region.y + region.alto
+	);
+}
+
+/** Dónde cae un tirador dentro del rectángulo, de 0 a 1 por eje. */
+export function anclaDe(rol: Rol): { x: number; y: number } {
+	const x = rol.includes('l') ? 0 : rol.includes('r') ? 1 : 0.5;
+	const y = rol.includes('t') ? 0 : rol.includes('b') ? 1 : 0.5;
+	return { x, y };
+}
+
+/**
+ * Mete una región adentro del lienzo, recortándola.
+ *
+ * Recortar y no correr: quien llama a esto está moviendo un borde, y correr el
+ * rectángulo entero porque un borde se pasó movería también el opuesto, que la
+ * persona no tocó.
+ */
+export function limitar(region: Region, lienzo: { ancho: number; alto: number }): Region {
+	const izquierda = Math.min(Math.max(region.x, 0), lienzo.ancho);
+	const arriba = Math.min(Math.max(region.y, 0), lienzo.alto);
+	const derecha = Math.min(Math.max(region.x + region.ancho, 0), lienzo.ancho);
+	const abajo = Math.min(Math.max(region.y + region.alto, 0), lienzo.alto);
+	return {
+		x: izquierda,
+		y: arriba,
+		ancho: derecha - izquierda,
+		alto: abajo - arriba,
+	};
+}
+
+/**
+ * Mueve el o los bordes que nombra el rol, y normaliza.
+ *
+ * Normalizar acá no es un detalle: arrastrando el borde derecho más allá del
+ * izquierdo, el ancho sale negativo y el CSS deja de dibujar. Con la
+ * normalización el rectángulo se **da vuelta**, que es lo que hace cualquier
+ * herramienta de selección y lo que la mano espera.
+ */
+export function ajustar(
+	region: Region,
+	rol: Rol,
+	dx: number,
+	dy: number,
+	lienzo: { ancho: number; alto: number }
+): Region {
+	let izquierda = region.x;
+	let arriba = region.y;
+	let derecha = region.x + region.ancho;
+	let abajo = region.y + region.alto;
+
+	if (rol.includes('l')) izquierda += dx;
+	if (rol.includes('r')) derecha += dx;
+	if (rol.includes('t')) arriba += dy;
+	if (rol.includes('b')) abajo += dy;
+
+	return limitar(
+		{
+			x: Math.min(izquierda, derecha),
+			y: Math.min(arriba, abajo),
+			ancho: Math.abs(derecha - izquierda),
+			alto: Math.abs(abajo - arriba),
+		},
+		lienzo
+	);
+}
+
+/**
+ * Corre la región entera sin cambiarle el tamaño.
+ *
+ * Contra el borde se **detiene**, no se achica: lo que se está haciendo es
+ * mover, y una región que pierde ancho al llegar al borde deja de ser la que se
+ * eligió. Si no entra en el lienzo —no debería, pero un lienzo más chico que la
+ * selección es lo que pasa si algo cambió debajo— queda pegada al origen.
+ */
+export function correr(
+	region: Region,
+	dx: number,
+	dy: number,
+	lienzo: { ancho: number; alto: number }
+): Region {
+	const tope = (valor: number, medida: number, limite: number) =>
+		Math.max(0, Math.min(valor, limite - medida));
+	return {
+		...region,
+		x: tope(region.x + dx, region.ancho, lienzo.ancho),
+		y: tope(region.y + dy, region.alto, lienzo.alto),
+	};
+}

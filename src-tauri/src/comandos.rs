@@ -3,6 +3,7 @@
 use crate::captura::{self, Region, Salida};
 use crate::destino;
 use crate::preferencias::{self as prefs, AlSoltar};
+use crate::ventanas::Ventana;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
@@ -40,6 +41,41 @@ pub fn recordar_salida(salida: Salida, layout: Salida) {
     if let Ok(mut guardia) = geometria().lock() {
         *guardia = Some(Geometria { salida, layout });
     }
+}
+
+/// Las ventanas que había cuando se tomó la captura, en coordenadas del layout.
+///
+/// Se anotan al arrancar, igual que la captura y por la misma razón: lo que se
+/// señala tiene que coincidir con lo que la imagen congelada muestra. Un mapa
+/// pedido después sería el de un escritorio que ya cambió.
+fn ventanas_de_entonces() -> &'static Mutex<Vec<Ventana>> {
+    static VENTANAS: OnceLock<Mutex<Vec<Ventana>>> = OnceLock::new();
+    VENTANAS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Anota las ventanas que había al capturar.
+pub fn recordar_ventanas(ventanas: Vec<Ventana>) {
+    if let Ok(mut guardia) = ventanas_de_entonces().lock() {
+        *guardia = ventanas;
+    }
+}
+
+/// Las ventanas que se ven en esta pantalla, en coordenadas del selector.
+///
+/// Una lista vacía no es un error: sin wayfire —otro compositor, el IPC
+/// apagado— no se puede señalar una ventana y queda el arrastre, que es lo que
+/// había antes. El selector apaga el resaltado y sigue.
+#[tauri::command]
+pub fn ventanas() -> Vec<Ventana> {
+    let Ok(guardia) = ventanas_de_entonces().lock() else {
+        return Vec::new();
+    };
+    let Some(salida) = geometria().lock().ok().and_then(|g| *g).map(|g| g.salida) else {
+        // Sin geometría no se sabe qué pantalla tapa el selector, y traducir
+        // con una supuesta pondría los recuadros donde no va ninguno.
+        return Vec::new();
+    };
+    crate::ventanas::en_la_pantalla(&guardia, salida)
 }
 
 /// Guarda la captura recién tomada para que el selector la muestre.

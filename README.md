@@ -17,9 +17,31 @@ preferencia de abajo —sin tocar nada, guardar y copiar—, y con «esperar» s
 no entrega: congela la selección y deja decidir con los botones. Un clic sin
 arrastrar no entrega nada.
 
+**Un clic sobre una ventana la captura entera.** Al pasar el puntero se resalta
+la que está debajo; el clic la elige con su borde exacto, sin encuadrarla a ojo.
+
 El resto del selector sigue ahí para lo que no es un arrastre: **Intro** guarda y
 copia —y sin arrastrar nada captura la pantalla entera, que es el camino más corto
 para el caso más común—, **Ctrl+C** copia sin guardar, **Esc** cancela.
+
+### Corregir lo elegido
+
+Con la preferencia en «esperar», la selección queda ahí y se puede acomodar antes
+de entregarla:
+
+| Cómo | Qué hace |
+|---|---|
+| Los ocho tiradores | Mueven ese borde. Los de esquina, los dos que tocan |
+| Arrastrar adentro | Corre la selección entera sin cambiarle el tamaño |
+| Flechas | Corren la selección un píxel; con **Mayús**, diez |
+| **Ctrl**+flechas | Mueven el borde de abajo a la derecha, o sea redimensionan |
+
+Cruzar un borde más allá del opuesto **da vuelta** la selección en lugar de
+dejarla en cero, y nada se puede sacar de la pantalla.
+
+Mientras se elige o se corrige aparece una **lupa** con la captura ampliada y las
+coordenadas: es lo que permite parar en el píxel que se quiere y no en el de al
+lado. Se da vuelta sola contra los bordes, que es justo donde más se la necesita.
 
 ## Preferencias
 
@@ -106,10 +128,32 @@ carga se dice.
 `grim` para capturar, `wl-clipboard` para el portapapeles, `gtk-layer-shell` para
 la superficie que tapa todo, y `libnotify` para el aviso al guardar.
 
+## Dónde está cada ventana
+
+Se lo pregunta al **IPC de wayfire**, que es el único que lo sabe.
+`zwlr_foreign_toplevel_manager` —que es lo que este archivo suponía que hacía
+falta— informa títulos y estados, **no rectángulos**. El socket de wayfire no
+pasa por `permisos-globales`: es un socket Unix anunciado por una variable de
+entorno, no un global de Wayland, y esta aplicación ya lo usaba para saber dónde
+está el puntero.
+
+Dos cosas que hay que saber para que las coordenadas den:
+
+- **La geometría de una vista es relativa a su salida, no al layout.** Medido en
+  una sesión de dos monitores apilados: una ventana a pantalla completa en el de
+  abajo —que empieza en `y = 1080`— contesta `y = 0`. Hay que sumarle el origen
+  de su salida, que sale de `list-outputs`.
+- **Las ventanas de los otros escritorios están corridas un ancho de pantalla**,
+  así que recortar contra la salida las deja afuera sin tener que preguntar en
+  qué espacio de trabajo está cada una.
+
+Se pregunta **al arrancar**, junto con la captura y por la misma razón: lo que se
+señala tiene que coincidir con lo que la imagen congelada muestra.
+
+Sin wayfire la lista queda vacía, no se resalta nada y queda el arrastre.
+
 ## Lo que falta
 
-- **Capturar una ventana** eligiéndola con el puntero. Necesita
-  `zwlr_foreign_toplevel_manager` para saber dónde está cada una.
 - **Anotar**: flechas, recuadros, difuminar una zona antes de compartir.
 - **Retardo** antes de capturar, para poder abrir un menú.
 
