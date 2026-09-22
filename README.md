@@ -9,7 +9,9 @@ Las capturas de pantalla de VasakOS.
 | `Impr Pant` | Abre el selector: arrastrá una zona, o apretá Intro para toda la pantalla |
 | `Mayús+Impr Pant` | Guarda toda la pantalla directo, sin interfaz |
 | `vasak-shot` | Lo mismo que la tecla: abre el selector |
-| `vasak-shot --pantalla` | Guarda y copia toda la pantalla, imprime la ruta y sale |
+| `vasak-shot --pantalla` | Guarda y copia todas las pantallas juntas, imprime la ruta y sale |
+| `vasak-shot --salida DP-1` | Lo mismo con una sola, la que se llame así |
+| `vasak-shot --retardo 5` | Espera cinco segundos y recién ahí captura |
 
 **Soltar el botón entrega la captura.** El gesto es uno solo: se arrastra sobre lo
 que se quiere y al levantar el dedo ya está. Qué es «entregar» lo decide la
@@ -18,8 +20,14 @@ no entrega: congela la selección y deja decidir con los botones.
 
 **Un clic sobre una ventana la captura entera.** Al pasar el puntero se resalta
 la que está debajo; el clic la elige con su borde exacto, sin encuadrarla a ojo,
-y entrega como cualquier otra selección. Un clic **fuera** de toda ventana no
-elige nada: tocar la pantalla sin querer no puede guardar la pantalla entera.
+y entrega como cualquier otra selección. Un clic **fuera** de toda ventana elige
+**la pantalla entera**, que es lo que el resaltado venía mostrando: el recuadro
+y el nombre del monitor aparecen antes del clic, así que no hay nada que se
+guarde sin haberse anunciado. Antes ese clic no hacía nada, justamente porque no
+había forma de saber qué iba a pasar.
+
+Lo que gana bajo el puntero va de lo más chico a lo más grande: región
+arrastrada, después ventana, después pantalla.
 
 El resto del selector sigue ahí para lo que no es un arrastre: **Intro** guarda y
 copia —y sin arrastrar nada captura la pantalla entera, que es el camino más corto
@@ -209,9 +217,31 @@ señala tiene que coincidir con lo que la imagen congelada muestra.
 
 Sin wayfire la lista queda vacía, no se resalta nada y queda el arrastre.
 
+## Elegir la pantalla, y esperar antes de disparar
+
+Con más de un monitor, la barra de abajo los lista por su nombre de conector y
+sus medidas. Elegir uno lo entrega entero, **sin mover el puntero hasta él**: la
+captura ya los contiene a todos, así que la otra pantalla no hay que ir a
+buscarla. Por línea de órdenes es `--salida NOMBRE`, y un nombre que no existe
+falla diciendo cuáles hay en lugar de guardar cualquier cosa.
+
+El **retardo** es para lo que se cierra al perder el foco: un menú abierto, un
+desplegable, un globo de ayuda. Elegir 3, 5 o 10 segundos **cierra el selector**
+y vuelve a capturar cuando se cumplen — durante la espera no hay nada de esta
+aplicación en pantalla, que es el punto. Quien captura de nuevo es otro proceso,
+que arranca, espera y recién ahí toma los píxeles: el orden de siempre, píxeles
+antes que ventana.
+
+La cuenta regresiva va en una notificación, que es lo único que puede aparecer
+sin robar el foco. **Se apaga un segundo antes del disparo**, porque si no
+saldría adentro de la foto.
+
 ## Lo que falta
 
-- **Retardo** antes de capturar, para poder abrir un menú.
+- **Subir la captura** a algún lado y dar el enlace, para compartirla sin adjuntar
+  el archivo.
+- **El aviso de guardado no lleva a ninguna parte**: dice dónde quedó, pero no
+  abre ni la carpeta ni el archivo.
 
 ## Licencia
 

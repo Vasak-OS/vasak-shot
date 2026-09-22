@@ -21,7 +21,7 @@ inicio:
   saludo: "Hola, {0}"
 shot:
   errorImagen: No se pudo mostrar la captura. Es un problema de configuración, no de la pantalla.
-  instruccion: Arrastrá para elegir una zona, o guardá toda la pantalla
+  instruccion: Arrastrá para elegir una zona, o hacé clic para toda la pantalla
   copiar: Copiar
   guardar: Guardar
   cancelar: Cancelar
@@ -40,7 +40,7 @@ shot:
   alSoltarCopiar: Copiar al portapapeles
   alSoltarEsperar: Esperar, y decidir con los botones
   carpeta: Carpeta donde se guardan
-  instruccionConVentanas: Arrastrá para elegir una zona, o hacé clic en una ventana
+  instruccionConVentanas: Arrastrá para elegir una zona, hacé clic en una ventana, o en el fondo para toda la pantalla
   ajustar: Ajustar
   relleno: Relleno
   deshacer: Deshacer
@@ -55,3 +55,6 @@ shot:
   herramientaPaso: Paso
   herramientaDifuminar: Difuminar
   herramientaPixelar: Pixelar
+  retardo: Retardo
+  sinRetardo: Sin retardo
+  pantalla: Pantalla

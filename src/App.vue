@@ -12,6 +12,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useI18n } from '@vasakgroup/tauri-plugin-i18n';
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import BarraDeAnotacion from '@/components/BarraDeAnotacion.vue';
+import BarraDeCaptura from '@/components/BarraDeCaptura.vue';
 import CapaDeAnotaciones from '@/components/CapaDeAnotaciones.vue';
 import Lupa from '@/components/Lupa.vue';
 import PanelPreferencias from '@/components/PanelPreferencias.vue';
@@ -37,6 +38,7 @@ import {
 } from '@/tools/preferencias';
 import {
 	ajustar,
+	comoRegion,
 	contiene,
 	correr,
 	medidasDe,
@@ -47,7 +49,9 @@ import {
 	aEntregar as regionAEntregar,
 	regionEntre,
 } from '@/tools/region';
-import { comoRegion, type Ventana, ventanaEn } from '@/tools/ventanas';
+import { vuelveACapturar } from '@/tools/retardo';
+import { type Monitor, type Salidas, SIN_SALIDAS } from '@/tools/salidas';
+import { type Ventana, ventanaEn } from '@/tools/ventanas';
 
 const { t } = useI18n();
 
@@ -95,6 +99,9 @@ const puntero = ref<Punto | null>(null);
 
 /** Las ventanas que había cuando se tomó la captura. Vacía si no se pudo saber. */
 const ventanas = ref<Ventana[]>([]);
+
+/** Las pantallas que entraron en la captura, en coordenadas de ésta. */
+const salidas = ref<Salidas>(SIN_SALIDAS);
 
 /** Qué se dibuja. Nulo es el modo en el que se ajusta la selección. */
 const herramienta = ref<Herramienta | null>(null);
@@ -165,6 +172,24 @@ const pantalla = computed(() => lienzo.value?.salida ?? { ancho: 0, alto: 0 });
 const resaltada = computed<Ventana | null>(() => {
 	if (seleccion.value || arrastre.value || ajuste.value || panel.value) return null;
 	return ventanaEn(ventanas.value, puntero.value);
+});
+
+/**
+ * La pantalla entera, cuando no se está señalando nada más chico.
+ *
+ * Es el tercer escalón del resaltado, y el orden va de lo más chico y explícito
+ * a lo más grande: región arrastrada, después ventana, después pantalla. Sin
+ * esto, apretar Intro sin arrastrar ya entregaba esta pantalla entera — pero no
+ * había manera de enterarse antes de que pasara.
+ *
+ * No apaga la lupa, a diferencia de una ventana señalada: acá no hay ningún
+ * borde que el compositor haya puesto, y el píxel exacto por donde empezar a
+ * arrastrar sigue importando.
+ */
+const pantallaResaltada = computed<Monitor | null>(() => {
+	if (seleccion.value || arrastre.value || ajuste.value || panel.value) return null;
+	if (resaltada.value || !puntero.value) return null;
+	return salidas.value.actual;
 });
 
 /**
@@ -321,10 +346,12 @@ async function terminar() {
 	if (seleccion.value === null) {
 		// Sin arrastre, lo que vale es lo que se estaba señalando. Un clic sobre
 		// una ventana la elige entera, que es la manera de agarrar su borde
-		// exacto sin encuadrarla a ojo.
+		// exacto sin encuadrarla a ojo; sobre el fondo, la pantalla entera, que
+		// es lo que el resaltado venía mostrando.
 		const ventana = ventanaEn(ventanas.value, puntero.value);
-		if (!ventana) return;
-		seleccion.value = comoRegion(ventana);
+		const region = ventana ? comoRegion(ventana) : aEntregar.value;
+		if (!region) return;
+		seleccion.value = region;
 	}
 
 	// Las preferencias primero: entregar con las de siempre porque todavía no
@@ -346,9 +373,14 @@ async function salir() {
  * guarda tiene que ser exactamente lo que se vio, y el único dibujante es el
  * canvas. Sin anotaciones sigue yendo la región y nada más, que son cuatro
  * números: el PNG pesa megabytes y no hay por qué cruzarlos cuando nadie dibujó.
+ *
+ * La región puede venir de afuera: es como se entrega **otra pantalla**, que no
+ * se puede elegir con el ratón porque esta ventana no llega hasta ella. Va en
+ * coordenadas de ésta, que es el mismo espacio en el que Rust traduce todo lo
+ * demás.
  */
-async function entregar(comando: Comando) {
-	const r = aEntregar.value;
+async function entregar(comando: Comando, explicita?: Region) {
+	const r = explicita ?? aEntregar.value;
 	if (!r || trabajando.value) return;
 	trabajando.value = true;
 	error.value = '';
@@ -356,7 +388,10 @@ async function entregar(comando: Comando) {
 		// Con anotaciones, los bytes van solos como cuerpo crudo del pedido:
 		// adentro de un JSON serían una lista de números y costarían un orden de
 		// magnitud más.
-		const lienzoDeAnotacion = dibujo.value.items.length > 0 ? capa.value : null;
+		// Con una región explícita —otra pantalla— no van las anotaciones: lo
+		// dibujado está sobre **esta**, y el lienzo de anotación ni siquiera
+		// cubre lo que se está pidiendo.
+		const lienzoDeAnotacion = !explicita && dibujo.value.items.length > 0 ? capa.value : null;
 		const ruta = lienzoDeAnotacion
 			? await invoke<string | null>(`${comando}_anotada`, await lienzoDeAnotacion.exportar())
 			: await invoke<string | null>(comando, { region: r });
@@ -476,6 +511,55 @@ async function cargarVentanas() {
 	}
 }
 
+async function cargarSalidas() {
+	try {
+		salidas.value = await invoke<Salidas>('salidas');
+	} catch (e) {
+		console.error('No se pudo saber qué pantallas hay', e);
+	}
+}
+
+/**
+ * Vuelve a capturar dentro de unos segundos, con esta ventana cerrada.
+ *
+ * Cerrarla es la mitad del asunto: lo que se quiere fotografiar es un menú
+ * abierto, y el menú no se puede abrir con el selector tapando la pantalla.
+ * Quien captura de nuevo es otro proceso; éste se va.
+ */
+async function conRetardo(segundos: number) {
+	// El cero es el valor que ya está puesto: el botón está para mostrar cuál
+	// es, no para volver a lanzar nada.
+	if (!vuelveACapturar(segundos)) return;
+	trabajando.value = true;
+	try {
+		await invoke('recapturar', { retardo: segundos });
+	} catch (e) {
+		error.value = String(e);
+		trabajando.value = false;
+		return;
+	}
+	await salir();
+}
+
+/**
+ * Entrega una pantalla entera, sea ésta o cualquier otra.
+ *
+ * Con la acción de las preferencias, salvo que sea «esperar»: elegir una
+ * pantalla en la barra es un pedido explícito, igual que apretar Intro, y ahí
+ * no hay nada que esperar.
+ */
+async function entregarPantalla(monitor: Monitor) {
+	// Las preferencias primero, igual que al soltar el botón: las salidas y los
+	// ajustes se piden a la vez, y la barra aparece en cuanto llegan las
+	// primeras. Sin esperar, elegir una pantalla apenas abre la ventana
+	// guardaría un archivo que la preferencia decía que no.
+	await cargando.value;
+	await entregar(
+		comandoAlSoltar(ajustes.value.alSoltar) ?? 'guardar_y_copiar',
+		comoRegion(monitor)
+	);
+}
+
 async function cargarAjustes() {
 	try {
 		ajustes.value = await invoke<Ajustes>('ajustes');
@@ -498,9 +582,11 @@ async function guardarAjustes(alSoltar: AlSoltar, carpeta: string | null) {
 onMounted(async () => {
 	window.addEventListener('keydown', alTeclado);
 	cargando.value = cargarAjustes();
-	// Sin esperarla: que no se pueda saber dónde están las ventanas no puede
-	// demorar el arrastre, que es lo que funciona sin ellas.
+	// Sin esperarlas: que no se pueda saber dónde están las ventanas ni cuántas
+	// pantallas hay no puede demorar el arrastre, que es lo que funciona sin
+	// las dos cosas.
 	void cargarVentanas();
+	void cargarSalidas();
 	try {
 		const l = await invoke<Lienzo>('lienzo');
 		lienzo.value = l;
@@ -587,6 +673,22 @@ const estilo = computed(() => {
 		     el tema claro. -->
 		<div v-if="!seleccion" class="absolute inset-0 bg-black/55"></div>
 
+		<!-- La pantalla entera, cuando no se señala nada más chico. El mismo
+		     recuadro que una ventana y por la misma razón: mostrar qué pasaría
+		     al hacer clic antes de que pase. Sin fondo propio, que sobre una
+		     pantalla entera sería un velo de más. -->
+		<div
+			v-if="pantallaResaltada"
+			class="pointer-events-none absolute inset-0 rounded-corner border-2 border-primary"
+		>
+			<span
+				class="absolute top-2 left-2 whitespace-nowrap rounded-corner bg-primary px-2 py-0.5 font-mono text-tx-on-primary text-xs"
+			>
+				{{ pantallaResaltada.nombre }} · {{ pantallaResaltada.ancho }} ×
+				{{ pantallaResaltada.alto }}
+			</span>
+		</div>
+
 		<!-- La ventana que se está señalando. Es el mismo recuadro que la
 		     selección pero sin tiradores: todavía no se eligió nada, se está
 		     mostrando qué pasaría al hacer clic. -->
@@ -653,6 +755,16 @@ const estilo = computed(() => {
 			:style="{ left: `${escribiendo.punto.x}px`, top: `${escribiendo.punto.y}px` }"
 			@keydown.enter.stop.prevent="cerrarTexto()"
 			@blur="cerrarTexto()"
+		/>
+
+		<!-- Antes de elegir nada: qué capturar. Con una región elegida su lugar
+		     lo ocupa la barra de anotación, que responde la otra pregunta. -->
+		<BarraDeCaptura
+			v-if="!seleccion && !panel"
+			:salidas="salidas"
+			:trabajando="trabajando"
+			@retardo="conRetardo"
+			@pantalla="entregarPantalla"
 		/>
 
 		<BarraDeAnotacion

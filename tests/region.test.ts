@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { aEntregar, medidasDe, MINIMO, regionEntre } from '@/tools/region';
+import { aEntregar, comoRegion, medidasDe, MINIMO, regionEntre } from '@/tools/region';
+import type { Monitor } from '@/tools/salidas';
 
 describe('regionEntre', () => {
 	test('arrastrar desde las cuatro esquinas da el mismo rectángulo', () => {
@@ -66,5 +67,30 @@ describe('medidasDe', () => {
 
 	test('sin región no se muestra nada, en lugar de «null × null»', () => {
 		expect(medidasDe(null)).toBe('');
+	});
+});
+
+describe('comoRegion', () => {
+	test('una ventana y una pantalla son lo mismo: un rectángulo', () => {
+		// La misma conversión para las dos. Tenerla dos veces es como empezó a
+		// haber una copia en el módulo de ventanas.
+		expect(comoRegion({ x: 5, y: 6, ancho: 7, alto: 8 })).toEqual({
+			x: 5,
+			y: 6,
+			ancho: 7,
+			alto: 8,
+		});
+	});
+
+	test('sólo el rectángulo, sin lo que venga al lado', () => {
+		// Una pantalla trae su nombre, y ése no es parte de la región: mandarlo
+		// al backend sería mandar un campo que nadie va a leer.
+		const monitor: Monitor = { nombre: 'DP-1', x: 0, y: -1080, ancho: 1920, alto: 1080 };
+		expect(comoRegion(monitor)).toEqual({
+			x: 0,
+			y: -1080,
+			ancho: 1920,
+			alto: 1080,
+		});
 	});
 });

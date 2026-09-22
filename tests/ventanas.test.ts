@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { comoRegion, type Ventana, ventanaEn } from '@/tools/ventanas';
+import { type Ventana, ventanaEn } from '@/tools/ventanas';
 
 /** Ordenadas como las manda Rust: de la de más adelante a la de más atrás. */
 const VENTANAS: Ventana[] = [
@@ -31,16 +31,5 @@ describe('ventanaEn', () => {
 	test('sin puntero o sin ventanas no hay ninguna', () => {
 		expect(ventanaEn(VENTANAS, null)).toBeNull();
 		expect(ventanaEn([], { x: 10, y: 10 })).toBeNull();
-	});
-});
-
-describe('comoRegion', () => {
-	test('una ventana es una región', () => {
-		expect(comoRegion({ x: 5, y: 6, ancho: 7, alto: 8 })).toEqual({
-			x: 5,
-			y: 6,
-			ancho: 7,
-			alto: 8,
-		});
 	});
 });

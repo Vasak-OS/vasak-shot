@@ -1,7 +1,7 @@
 //! Lo que el frontend puede pedir.
 
 use crate::anotada;
-use crate::captura::{self, Region, Salida};
+use crate::captura::{self, Monitor, Region, Salida};
 use crate::destino;
 use crate::preferencias::{self as prefs, AlSoltar};
 use crate::ventanas::Ventana;
@@ -77,6 +77,105 @@ pub fn ventanas() -> Vec<Ventana> {
         return Vec::new();
     };
     crate::ventanas::en_la_pantalla(&guardia, salida)
+}
+
+/// Las salidas que había cuando se tomó la captura.
+///
+/// Las mismas que entraron en la imagen, y por eso van anotadas y no
+/// preguntadas de nuevo: si alguien desenchufa un monitor mientras el selector
+/// está abierto, lo que se puede recortar sigue siendo lo que la captura tiene.
+fn salidas_de_entonces() -> &'static Mutex<Vec<Monitor>> {
+    static SALIDAS: OnceLock<Mutex<Vec<Monitor>>> = OnceLock::new();
+    SALIDAS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Anota las salidas que entraron en la captura.
+pub fn recordar_salidas(salidas: Vec<Monitor>) {
+    if let Ok(mut guardia) = salidas_de_entonces().lock() {
+        *guardia = salidas;
+    }
+}
+
+/// Las pantallas, separadas en la que se está mirando y las demás.
+///
+/// Separadas y no una lista con una marca adentro porque el selector las usa
+/// para dos cosas distintas: la de acá se resalta y se nombra, y las otras se
+/// ofrecen en un menú. Una lista que hay que filtrar en los dos lugares es una
+/// condición repetida que en algún momento se escribe al revés.
+#[derive(Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct Salidas {
+    /// La que el selector está tapando, ya en (0, 0). Nula si no se sabe cuál es.
+    pub actual: Option<Monitor>,
+    /// Las demás, en coordenadas de esta pantalla: las de arriba y las de la
+    /// izquierda quedan en negativo, que es exactamente lo que
+    /// `Region::en_la_captura` deshace al traducir.
+    pub otras: Vec<Monitor>,
+}
+
+/// Reparte las salidas en la que ocupa `actual` y el resto.
+///
+/// Todas se llevan a coordenadas del selector. Es lo que permite pedir **otra
+/// pantalla** sin mover el puntero hasta ella: la región viaja en el mismo
+/// espacio que una selección hecha con el ratón, y el backend la traduce con la
+/// misma cuenta de siempre en lugar de con un camino aparte.
+fn repartir(salidas: &[Monitor], actual: Salida) -> Salidas {
+    let mut resultado = Salidas::default();
+    for salida in salidas {
+        let relativa = salida.relativo_a(actual);
+        if salida.area() == actual {
+            resultado.actual = Some(relativa);
+        } else {
+            resultado.otras.push(relativa);
+        }
+    }
+    resultado
+}
+
+/// Las pantallas que hay, en coordenadas del selector.
+#[tauri::command]
+pub fn salidas() -> Salidas {
+    let Ok(guardia) = salidas_de_entonces().lock() else {
+        return Salidas::default();
+    };
+    let Some(actual) = geometria().lock().ok().and_then(|g| *g).map(|g| g.salida) else {
+        // Sin saber qué pantalla tapa el selector no se puede traducir ninguna,
+        // y ofrecerlas en coordenadas del layout haría que elegir una recortara
+        // de otra.
+        return Salidas::default();
+    };
+    repartir(&guardia, actual)
+}
+
+/// Vuelve a capturar dentro de unos segundos, con esta ventana ya cerrada.
+///
+/// Lanza **otro proceso** en lugar de capturar de nuevo acá. No es un rodeo: la
+/// captura se toma al arrancar, antes de que exista ninguna ventana, y eso es
+/// justamente lo que hace falta para fotografiar un menú abierto. Reusar este
+/// proceso significaría capturar con el selector ya montado, o sea con una
+/// ventana tapando lo que se quiere.
+///
+/// Quien cierra esta ventana es el frontend, en cuanto esto contesta.
+#[tauri::command]
+pub fn recapturar(retardo: u64) -> Result<(), String> {
+    if retardo == 0 || retardo > crate::retardo::TECHO {
+        return Err(format!(
+            "un retardo de {retardo} s no sirve para volver a capturar; van de 1 a {}",
+            crate::retardo::TECHO
+        ));
+    }
+
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("no se pudo saber qué ejecutable es éste: {e}"))?;
+
+    std::process::Command::new(exe)
+        .args(["--retardo", &retardo.to_string()])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("no se pudo volver a lanzar la captura: {e}"))?;
+
+    Ok(())
 }
 
 /// Guarda la captura recién tomada para que el selector la muestre.
@@ -377,4 +476,113 @@ pub fn guardar_y_copiar(region: Region) -> Result<String, String> {
     }
     avisar(&final_);
     Ok(final_.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod pruebas {
+    use super::*;
+
+    /// Dos monitores de 1920x1080 apilados en vertical, como los de la máquina
+    /// donde se encontró el bug del recorte.
+    fn apilados() -> Vec<Monitor> {
+        vec![
+            Monitor::nuevo(
+                "DP-1",
+                Salida {
+                    x: 0,
+                    y: 0,
+                    ancho: 1920,
+                    alto: 1080,
+                },
+            ),
+            Monitor::nuevo(
+                "HDMI-A-1",
+                Salida {
+                    x: 0,
+                    y: 1080,
+                    ancho: 1920,
+                    alto: 1080,
+                },
+            ),
+        ]
+    }
+
+    #[test]
+    fn la_pantalla_del_selector_queda_en_el_origen() {
+        // Es la que el frontend dibuja con su propio tamaño: si no quedara en
+        // (0, 0), el resaltado de «esta pantalla entera» saldría corrido.
+        let salidas = apilados();
+        let repartidas = repartir(&salidas, salidas[1].area());
+
+        assert_eq!(
+            repartidas.actual,
+            Some(Monitor::nuevo(
+                "HDMI-A-1",
+                Salida {
+                    x: 0,
+                    y: 0,
+                    ancho: 1920,
+                    alto: 1080
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn la_otra_pantalla_queda_donde_el_layout_la_tiene() {
+        // Estando en la de abajo, la de arriba cae en negativo. Ese número es el
+        // que hace que pedirla recorte de la mitad de arriba de la captura y no
+        // de la de abajo.
+        let salidas = apilados();
+        let repartidas = repartir(&salidas, salidas[1].area());
+
+        assert_eq!(repartidas.otras.len(), 1);
+        assert_eq!(repartidas.otras[0].nombre, "DP-1");
+        assert_eq!((repartidas.otras[0].x, repartidas.otras[0].y), (0, -1080));
+    }
+
+    #[test]
+    fn las_dos_no_se_pisan_y_cubren_la_captura_entera() {
+        let salidas = apilados();
+        let layout = captura::layout_de(&salidas);
+
+        // Cubren todo: la suma de las áreas es la del encuadre.
+        let suma: i64 = salidas
+            .iter()
+            .map(|s| i64::from(s.ancho) * i64::from(s.alto))
+            .sum();
+        assert_eq!(suma, i64::from(layout.ancho) * i64::from(layout.alto));
+
+        // Y no se pisan: la de abajo empieza donde termina la de arriba.
+        assert_eq!(salidas[0].y + salidas[0].alto, salidas[1].y);
+    }
+
+    #[test]
+    fn sin_saber_en_cual_esta_no_se_marca_ninguna() {
+        // Una geometría que no es la de ninguna salida —un monitor
+        // desenchufado, una ventana que no se pudo ubicar— tiene que dejar
+        // `actual` vacía en lugar de elegir cualquiera: el frontend apaga el
+        // resaltado y sigue, que es lo que hace sin salidas.
+        let salidas = apilados();
+        let repartidas = repartir(
+            &salidas,
+            Salida {
+                x: 500,
+                y: 500,
+                ancho: 800,
+                alto: 600,
+            },
+        );
+
+        assert_eq!(repartidas.actual, None);
+        assert_eq!(repartidas.otras.len(), 2);
+    }
+
+    #[test]
+    fn un_retardo_de_cero_no_vuelve_a_lanzar_nada() {
+        // Sería lanzar un proceso que captura en el acto, o sea con el selector
+        // todavía en pantalla: la foto saldría de la propia herramienta.
+        assert!(recapturar(0).is_err());
+        assert!(recapturar(crate::retardo::TECHO + 1).is_err());
+    }
 }

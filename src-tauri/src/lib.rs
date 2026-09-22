@@ -14,41 +14,22 @@
 //! lugar de sobre una pantalla que sigue cambiando debajo.
 
 pub mod anotada;
+pub mod argumentos;
 pub mod captura;
 pub mod comandos;
 pub mod destino;
 mod locales;
 pub mod pantalla;
 pub mod preferencias;
+pub mod retardo;
 pub mod ventanas;
 pub mod wayfire;
 
+use argumentos::Modo;
 use captura::Salida;
 use gtk::prelude::*;
 use gtk_layer_shell::LayerShell;
 use tauri::Manager;
-
-/// Cómo se invocó el programa.
-#[derive(Debug, PartialEq, Eq)]
-pub enum Modo {
-    /// Abrir el selector para elegir una región.
-    Selector,
-    /// Guardar toda la pantalla y salir, sin interfaz.
-    PantallaCompleta,
-}
-
-/// Lee el modo de los argumentos.
-///
-/// Separado para poder probarlo: de esto depende que apretar la tecla de captura
-/// abra el selector o guarde directo, y confundirlos hace que la herramienta
-/// haga lo contrario de lo que se le pidió.
-pub fn modo_de(argumentos: &[String]) -> Modo {
-    if argumentos.iter().any(|a| a == "--pantalla" || a == "-p") {
-        Modo::PantallaCompleta
-    } else {
-        Modo::Selector
-    }
-}
 
 /// Dónde está el puntero, preguntándoselo al compositor.
 ///
@@ -229,9 +210,55 @@ fn tapar_todo(ventana: &tauri::WebviewWindow) -> Option<(Salida, Salida)> {
     Some((salida, layout))
 }
 
+/// Qué región se guarda sin abrir el selector, si el modo es de los que no lo abren.
+///
+/// `None` es «abrí el selector». El `Err` es un nombre de pantalla que no
+/// existe, y ahí no se guarda nada: entregar la composición entera porque el
+/// nombre estaba mal sería dar algo parecido a lo pedido, que es la peor manera
+/// de fallar.
+///
+/// Las regiones que salen de acá van ya **en píxeles de la captura**, que es lo
+/// que `comandos::guardar_y_copiar` recibe cuando no hay ventana: sin geometría
+/// anotada, la traducción es la identidad.
+fn region_directa(
+    modo: &Modo,
+    tomada: &captura::Captura,
+) -> Option<Result<captura::Region, String>> {
+    match modo {
+        Modo::Selector => None,
+        // Todas las pantallas juntas, que es la imagen tal cual se compuso.
+        Modo::PantallaCompleta => Some(Ok(captura::Region {
+            x: 0,
+            y: 0,
+            ancho: tomada.ancho as i32,
+            alto: tomada.alto as i32,
+        })),
+        Modo::Salida(nombre) => {
+            let layout = captura::layout_de(&tomada.salidas);
+            let escala = captura::escala_de((tomada.ancho, tomada.alto), layout);
+            Some(
+                captura::buscar(&tomada.salidas, nombre)
+                    .map(|salida| salida.en_la_captura(layout, escala)),
+            )
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let argumentos: Vec<String> = std::env::args().collect();
+    let opciones = match argumentos::leer(&argumentos) {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("vasak-shot: {e}");
+            std::process::exit(2);
+        }
+    };
+
+    // El retardo, **antes que todo lo demás**. Durante la espera no hay nada de
+    // esta aplicación en pantalla —ni ventana ni captura tomada— que es lo que
+    // permite dejar un menú abierto y fotografiarlo.
+    retardo::esperar(opciones.retardo);
 
     // La captura, **antes** de armar nada de Tauri. Es lo que hace que el
     // instante guardado sea el que la persona vio al apretar la tecla.
@@ -244,18 +271,19 @@ pub fn run() {
         }
     };
 
-    // Con `--pantalla` no hace falta interfaz: se guarda y se sale. Así la tecla
-    // de captura puede hacer lo obvio sin abrir nada, que es lo que se espera
-    // cuando se quiere la pantalla entera.
-    if modo_de(&argumentos) == Modo::PantallaCompleta {
-        let todo = captura::Region {
-            x: 0,
-            y: 0,
-            ancho: tomada.ancho as i32,
-            alto: tomada.alto as i32,
+    // Con `--pantalla` o con `--salida` no hace falta interfaz: se guarda y se
+    // sale. Así la tecla de captura puede hacer lo obvio sin abrir nada.
+    if let Some(region) = region_directa(&opciones.modo, &tomada) {
+        let region = match region {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("vasak-shot: {e}");
+                let _ = std::fs::remove_file(&cruda);
+                std::process::exit(2);
+            }
         };
         comandos::recordar(tomada);
-        match comandos::guardar_y_copiar(todo) {
+        match comandos::guardar_y_copiar(region) {
             Ok(ruta) => println!("{ruta}"),
             Err(e) => {
                 eprintln!("vasak-shot: no se pudo guardar: {e}");
@@ -266,6 +294,9 @@ pub fn run() {
         return;
     }
 
+    // Las pantallas que entraron en la captura, para poder resaltar la que se
+    // está mirando y ofrecer las otras sin volver a lanzar la herramienta.
+    comandos::recordar_salidas(tomada.salidas.clone());
     comandos::recordar(tomada);
 
     // Las ventanas, **en el mismo momento que los píxeles** y antes de que
@@ -307,6 +338,8 @@ pub fn run() {
             comandos::guardar_anotada,
             comandos::copiar_anotada,
             comandos::guardar_y_copiar_anotada,
+            comandos::salidas,
+            comandos::recapturar,
         ])
         .setup(|app| {
             // El layer-shell tiene que correr en el hilo principal —GTK aborta
@@ -463,33 +496,108 @@ mod tests {
         assert!(x > i32::MIN && y > i32::MIN, "({x}, {y})");
     }
 
-    #[test]
-    fn sin_argumentos_se_abre_el_selector() {
-        // El caso normal: apretar la tecla y elegir con el ratón.
-        assert_eq!(modo_de(&["vasak-shot".to_string()]), Modo::Selector);
-    }
-
-    #[test]
-    fn con_pantalla_se_guarda_directo() {
-        // Confundir los dos modos hace que la herramienta haga lo contrario de
-        // lo que se le pidió, y no falla: simplemente abre una ventana cuando se
-        // esperaba un archivo, o al revés.
-        for bandera in ["--pantalla", "-p"] {
-            assert_eq!(
-                modo_de(&["vasak-shot".to_string(), bandera.to_string()]),
-                Modo::PantallaCompleta,
-                "con {bandera}"
-            );
+    /// Una captura de mentira con dos pantallas, para probar `--salida`.
+    ///
+    /// El origen del layout en negativo a propósito: un monitor puesto a la
+    /// izquierda del primario tiene coordenadas negativas, y ahí es donde la
+    /// traducción se rompe si alguien se olvida de restarlo.
+    fn dos_pantallas() -> captura::Captura {
+        captura::Captura {
+            ruta: std::path::PathBuf::from("/tmp/de-mentira.png"),
+            ancho: 3840,
+            alto: 1080,
+            salidas: vec![
+                captura::Monitor::nuevo(
+                    "DP-1",
+                    Salida {
+                        x: -1920,
+                        y: 0,
+                        ancho: 1920,
+                        alto: 1080,
+                    },
+                ),
+                captura::Monitor::nuevo(
+                    "HDMI-A-1",
+                    Salida {
+                        x: 0,
+                        y: 0,
+                        ancho: 1920,
+                        alto: 1080,
+                    },
+                ),
+            ],
         }
     }
 
     #[test]
-    fn un_argumento_desconocido_no_cambia_el_modo() {
-        // Mejor abrir el selector que interpretar cualquier cosa como «guardá
-        // todo»: lo primero se cancela con Esc, lo segundo ya escribió el archivo.
+    fn sin_argumentos_no_se_guarda_nada_solo() {
+        // El caso normal: apretar la tecla, abrir el selector y elegir con el
+        // ratón. Una región acá significaría un archivo que nadie pidió.
+        assert!(region_directa(&Modo::Selector, &dos_pantallas()).is_none());
+    }
+
+    #[test]
+    fn con_pantalla_se_guarda_la_composicion_entera() {
+        let tomada = dos_pantallas();
+        let region = region_directa(&Modo::PantallaCompleta, &tomada)
+            .expect("--pantalla no abre el selector")
+            .expect("y no puede fallar");
         assert_eq!(
-            modo_de(&["vasak-shot".to_string(), "--que-se-yo".to_string()]),
-            Modo::Selector
+            region,
+            captura::Region {
+                x: 0,
+                y: 0,
+                ancho: 3840,
+                alto: 1080
+            }
+        );
+    }
+
+    #[test]
+    fn una_salida_se_recorta_exactamente_donde_esta() {
+        // Con el origen del layout en -1920, la pantalla de la izquierda es la
+        // **primera** mitad de la imagen y la otra la segunda. Sin restar el
+        // origen, las dos darían el mismo recorte o uno fuera de la imagen.
+        let tomada = dos_pantallas();
+
+        let izquierda = region_directa(&Modo::Salida("DP-1".to_string()), &tomada)
+            .expect("--salida no abre el selector")
+            .expect("esa pantalla existe");
+        assert_eq!(
+            izquierda,
+            captura::Region {
+                x: 0,
+                y: 0,
+                ancho: 1920,
+                alto: 1080
+            }
+        );
+
+        let derecha = region_directa(&Modo::Salida("HDMI-A-1".to_string()), &tomada)
+            .expect("--salida no abre el selector")
+            .expect("esa pantalla también existe");
+        assert_eq!(
+            derecha,
+            captura::Region {
+                x: 1920,
+                y: 0,
+                ancho: 1920,
+                alto: 1080
+            }
+        );
+    }
+
+    #[test]
+    fn una_salida_que_no_existe_no_guarda_cualquier_cosa() {
+        // Y el error dice cuáles hay: el nombre del conector no se muestra en
+        // ningún lado del escritorio, así que sin la lista hay que ir a
+        // buscarlo con otra herramienta.
+        let error = region_directa(&Modo::Salida("VGA-9".to_string()), &dos_pantallas())
+            .expect("--salida no abre el selector")
+            .expect_err("esa pantalla no existe");
+        assert!(
+            error.contains("DP-1") && error.contains("HDMI-A-1"),
+            "{error}"
         );
     }
 }
