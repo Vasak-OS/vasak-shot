@@ -113,9 +113,9 @@ la región y nada más, que son cuatro números.
 La rueda dentada de la barra abre dos cosas:
 
 - **Qué hace soltar el botón**: guardar y copiar (lo de siempre), sólo guardar,
-  sólo copiar, o **esperar** y decidir con los botones. La última es la que va a
-  hacer falta cuando se pueda anotar la captura o ajustar la selección, porque las
-  dos cosas pasan después de soltar.
+  sólo copiar, o **esperar** y decidir con los botones. La última es la que hace
+  falta para anotar la captura o ajustar la selección, porque las dos cosas pasan
+  después de soltar.
 - **En qué carpeta se guarda.** Se escribe a mano: el selector es una superficie
   de capa que tapa todo, y un diálogo de sistema lanzado desde ahí aparece detrás
   o no aparece. Abajo del campo está siempre a la vista dónde van a ir a parar las
@@ -140,32 +140,75 @@ justo el momento que se quería guardar: el menú que estaba abierto se cerró, 
 cursor se movió, la notificación desapareció.
 
 Así que se captura al arrancar y la ventana muestra ese cuadro **congelado**.
-Medido en esta máquina:
+Medido en esta máquina, en release, con `cargo run --release --example tiempos`:
 
 ```
-capturar   136 ms   1920x1080
-recortar   295 ms   300x200
+escribir el PNG    46 ms   1920x1080
+recortar            6 ms   300x200
 ```
 
-Los 430 ms ocurren enteros *después* de que el instante ya está en disco, así que
-la lentitud de la interfaz deja de importar. Y de paso la selección se hace sobre
-una imagen quieta en lugar de sobre una pantalla que sigue cambiando debajo.
+**Lo que ese ejemplo no mide es la conversación con el compositor**, y no por
+olvido: el permiso de captura es por ejecutable y lo tiene `/usr/bin/vasak-shot`,
+así que un binario compilado en un árbol de trabajo falla antes de pedir el primer
+buffer. Los números de acá son los de los pasos que sí se pueden medir en
+cualquier lado — y son los que importan para el argumento, porque ocurren enteros
+*después* de que el instante ya está congelado.
 
-## Lo que no se reimplementa
+Que sean decenas de milisegundos y no unidades tampoco cambia nada: la ventana
+tarda mil o dos mil. Y de paso la selección se hace sobre una imagen quieta en
+lugar de sobre una pantalla que sigue cambiando debajo.
 
-Los píxeles los toma **`grim`**. Ya habla `zwlr_screencopy` correctamente, maneja
-varias salidas con sus escalas, y viene instalado. Reescribirlo sería rehacer la
-parte difícil para llegar al mismo lugar.
+(Los números que había acá antes —136 ms de captura, 295 ms de recorte— eran los
+de `grim` y de una compilación de depuración. Un README con números que nadie
+puede reproducir es peor que uno sin números: suenan verosímiles y se toman
+decisiones con ellos.)
 
-El recorte sí es propio, y **no** con `grim -g`, por dos razones: una sola captura
+## Por qué los píxeles los toma esta aplicación y no `grim`
+
+**No porque `grim` esté mal**: hace esto bien y de ahí salió la forma de hacerlo.
+El motivo es de permisos. El escritorio limita qué programas pueden pedirle al
+compositor los protocolos que ven la sesión —`permisos-globales`, de
+`vasak-wayfire-plugins`— y esa lista es **por ejecutable**. Con `grim` adentro,
+cualquier programa capturaba la pantalla entera con dos líneas:
+
+```sh
+#!/usr/bin/env bash
+grim "$1"
+```
+
+Medido: capturó 290 950 bytes sin estar en ninguna lista. El permiso de compartir
+pantalla se saltaba llamando a la herramienta que sí lo tenía. Que los píxeles los
+tome esta aplicación es lo que dejó sacar a `grim` de la lista sin que el
+escritorio pierda las capturas — y capturar a mano desde una terminal dejó de
+andar, a propósito.
+
+Así que `zwlr_screencopy_manager_v1` se habla acá: copia **una salida** por vez a
+un buffer de memoria compartida, y componer es cosa nuestra. La posición y el
+tamaño lógicos salen de `xdg_output` y no de `wl_output`, cuyos números están en
+píxeles del dispositivo y no contemplan la escala.
+
+El recorte también es propio, y por dos razones que valen igual: una sola captura
 en lugar de dos —lo que se guarda es exactamente el instante que se vio— y porque
-la geometría de `grim` está en coordenadas del layout de salidas, que no siempre
-coinciden con las de la pantalla: en la máquina de desarrollo `-g "0,0 400x300"`
-contesta «did not intersect with any outputs».
+la geometría del layout de salidas no coincide con las coordenadas de la pantalla
+en la que se está eligiendo.
 
-El portapapeles va por **`wl-copy`**, que es el que sabe declarar `image/png` en
-Wayland. El de Tauri maneja texto, y lo que hace útil una captura es poder pegarla
-como imagen.
+El portapapeles sí es prestado: va por **`wl-copy`**, que es el que sabe declarar
+`image/png` en Wayland. El de Tauri maneja texto, y lo que hace útil una captura
+es poder pegarla como imagen.
+
+### Cuando los monitores tienen escalas distintas
+
+El lienzo se compone en la escala **mayor** de todas las pantallas: bajar todo a
+la menor tiraría píxeles que existen. Eso deja a las de menor escala estiradas
+adentro de la imagen compuesta, así que de ahí no salen los recortes: de cada
+pantalla que hubo que estirar se guardan aparte **sus píxeles tal como llegaron**,
+y una selección que cabe entera en una de ellas se recorta de ésos. Sin eso, una
+captura de 400×300 en el monitor al 100 % se guardaba como un archivo de 600×400
+interpolado, con el selector diciendo 400×300.
+
+De las que no se estiraron no se guarda nada: el lienzo ya tiene sus píxeles de
+verdad, y una segunda copia serían decenas de megabytes repetidos. Con un solo
+monitor —el caso de todos los días— no se guarda ninguno.
 
 ## Tres cosas que costaron encontrar
 
@@ -190,8 +233,13 @@ carga se dice.
 
 ## Dependencias
 
-`grim` para capturar, `wl-clipboard` para el portapapeles, `gtk-layer-shell` para
-la superficie que tapa todo, y `libnotify` para el aviso al guardar.
+`wl-clipboard` para el portapapeles, `gtk-layer-shell` para la superficie que tapa
+todo, y `libnotify` para el aviso al guardar y para la cuenta regresiva del
+retardo.
+
+Para capturar no hace falta ninguna: el crate de Wayland trae su propia
+implementación del protocolo y **no** enlaza `libwayland-client` — comprobado con
+`readelf -d` sobre el binario.
 
 ## Dónde está cada ventana
 
