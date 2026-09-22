@@ -105,6 +105,18 @@ export function tapa(tipo: Herramienta): boolean {
 }
 
 /**
+ * Los grosores que ofrece la barra, de trazo fino a marcador.
+ *
+ * Viven acá, con los valores por omisión, y no en la barra: si no salen de la
+ * misma lista, una herramienta se estrena con un grosor que **no está entre los
+ * botones** y la barra aparece sin ninguno marcado.
+ */
+export const GROSORES = [2, 4, 8, 16];
+
+/** Cuánto puede tapar una zona, para las dos que tapan. */
+export const TAPADOS = [6, 10, 16, 24];
+
+/**
  * Cuánto tapa cada una por omisión.
  *
  * Elegidos mirando **un renglón de terminal**, que es lo que de verdad se
@@ -113,15 +125,25 @@ export function tapa(tipo: Herramienta): boolean {
  */
 export const TAPADO_POR_OMISION: Record<'difuminar' | 'pixelar', number> = {
 	difuminar: 10,
-	pixelar: 12,
+	pixelar: 16,
 };
+
+/** Con qué grosor se estrena cada herramienta que dibuja. */
+export const GROSOR_POR_OMISION = 4;
+
+/** El resaltador se estrena grueso: uno del ancho de un lápiz no resalta nada. */
+export const GROSOR_DEL_RESALTADOR = 16;
 
 /** El estilo con el que arranca cada herramienta. */
 export function estiloPorOmision(tipo: Herramienta, color: string): Estilo {
 	if (tapa(tipo)) {
 		return { color, grosor: TAPADO_POR_OMISION[tipo as 'difuminar' | 'pixelar'], relleno: false };
 	}
-	return { color, grosor: tipo === 'resaltador' ? 12 : 3, relleno: false };
+	return {
+		color,
+		grosor: tipo === 'resaltador' ? GROSOR_DEL_RESALTADOR : GROSOR_POR_OMISION,
+		relleno: false,
+	};
 }
 
 /**

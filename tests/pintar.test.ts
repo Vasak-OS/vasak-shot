@@ -121,7 +121,9 @@ describe('pintar', () => {
 		);
 		const pasadas = log.filter((l) => l.startsWith('stroke '));
 		expect(pasadas).toHaveLength(1);
-		expect(pasadas[0]).toBe('stroke alfa=0.35 grosor=24');
+		// El grosor es el que dice la barra, sin factores escondidos: lo que lo
+		// hace un resaltador es con qué grosor se estrena.
+		expect(pasadas[0]).toBe('stroke alfa=0.35 grosor=12');
 	});
 
 	test('un trazo de un solo punto igual deja marca', () => {
@@ -198,5 +200,41 @@ describe('las zonas tapadas', () => {
 			SIN_ESCALA
 		);
 		expect(log).toEqual([]);
+	});
+});
+
+describe('la escala del tapado', () => {
+	test('el radio y el bloque van en píxeles del lienzo, no del selector', () => {
+		// El grosor se elige mirando la pantalla y el efecto trabaja sobre la
+		// captura, que en una pantalla HiDPI tiene el doble. Sin convertirlo,
+		// lo que tapa queda a la mitad de lo pedido — y quedarse corto es
+		// justamente el error que importa en algo que tapa.
+		const { ctx, log } = contextoDeMentira(800, 600);
+		pintar(ctx, [anotacion('difuminar', { grosor: 10 })], {
+			origen: { x: 0, y: 0 },
+			escalaX: 2,
+			escalaY: 2,
+		});
+		// La zona va de (20,40) a (220,240) en el lienzo, y el margen es 20.
+		expect(log.find((l) => l.startsWith('getImageData'))).toBe('getImageData 0 20 240 240');
+	});
+
+	test('el mosaico se alinea con la grilla ya escalada', () => {
+		const { ctx, log } = contextoDeMentira(800, 600);
+		pintar(
+			ctx,
+			[
+				anotacion('pixelar', {
+					grosor: 6,
+					puntos: [
+						{ x: 10, y: 10 },
+						{ x: 60, y: 60 },
+					],
+				}),
+			],
+			{ origen: { x: 0, y: 0 }, escalaX: 2, escalaY: 2 }
+		);
+		// Bloque 6 en el selector son 12 en el lienzo; 20 cae en el múltiplo 12.
+		expect(log.find((l) => l.startsWith('getImageData'))).toStartWith('getImageData 12 12 ');
 	});
 });

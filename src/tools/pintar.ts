@@ -152,10 +152,10 @@ function punta(ctx: CanvasRenderingContext2D, desde: Punto, hasta: Punto, grosor
  * donde la mano fue más lenta.
  */
 function trazo(ctx: CanvasRenderingContext2D, a: Anotacion, encuadre: Encuadre): void {
-	if (a.tipo === 'resaltador') {
-		ctx.globalAlpha = ALFA_RESALTADOR;
-		ctx.lineWidth = grosorEnElLienzo(a.grosor, encuadre) * 2;
-	}
+	// Translúcido, pero del grosor que dice la barra: lo que lo hace un
+	// resaltador y no un lápiz es con qué grosor se estrena, no un factor
+	// escondido que hace que el número de la barra signifique otra cosa.
+	if (a.tipo === 'resaltador') ctx.globalAlpha = ALFA_RESALTADOR;
 	ctx.beginPath();
 	const primero = enElLienzo(a.puntos[0], encuadre);
 	ctx.moveTo(primero.x, primero.y);
@@ -205,10 +205,17 @@ function aplicarEfecto(ctx: CanvasRenderingContext2D, a: Anotacion, encuadre: En
 	const r = rectangulo(a, encuadre);
 	if (r.ancho < 1 || r.alto < 1) return;
 
+	// **En píxeles del lienzo, no del selector.** El grosor se elige mirando la
+	// pantalla y el efecto trabaja sobre la captura, que en una pantalla HiDPI
+	// tiene el doble: sin convertirlo, lo que tapa queda a la mitad de lo que se
+	// pidió — y en algo que tapa, quedarse corto es el error que importa. Es la
+	// misma conversión escalar que el grosor de un trazo; con ejes de escala
+	// distinta ninguna de las dos es exacta, y esa es la que ya se eligió.
+	const intensidad = Math.round(grosorEnElLienzo(a.grosor, encuadre));
 	const lienzo = ctx.canvas;
-	const margen = a.tipo === 'difuminar' ? Math.ceil(a.grosor * encuadre.escalaX) : a.grosor;
+	const margen = a.tipo === 'difuminar' ? intensidad : 0;
 	const alinear = (valor: number) =>
-		a.tipo === 'pixelar' ? Math.floor(valor / a.grosor) * a.grosor : valor - margen;
+		a.tipo === 'pixelar' ? Math.floor(valor / intensidad) * intensidad : valor - margen;
 
 	const x = Math.max(0, Math.floor(alinear(r.x)));
 	const y = Math.max(0, Math.floor(alinear(r.y)));
@@ -225,8 +232,8 @@ function aplicarEfecto(ctx: CanvasRenderingContext2D, a: Anotacion, encuadre: En
 		alto: r.alto,
 	};
 
-	if (a.tipo === 'pixelar') pixelar(mapa, adentro, a.grosor);
-	else difuminar(mapa, adentro, a.grosor);
+	if (a.tipo === 'pixelar') pixelar(mapa, adentro, intensidad);
+	else difuminar(mapa, adentro, intensidad);
 
 	// Sólo se devuelve lo de adentro: el margen se tomó para poder mirar, no
 	// para taparlo.

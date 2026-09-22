@@ -279,8 +279,11 @@ pub fn copiar(region: Region) -> Result<(), String> {
             .clone()
     };
 
-    let temporal =
-        std::env::temp_dir().join(format!("vasak-shot-copia-{}.png", std::process::id()));
+    // Creado en exclusiva y en `0o600`: `/tmp` lo comparte toda la máquina, y
+    // una captura que se pidió **sólo copiar** no puede quedar un rato legible
+    // por otra cuenta. `recortar` escribe sobre el archivo que ya existe y no le
+    // cambia los permisos.
+    let temporal = anotada::temporal("copia")?;
     captura::recortar(&origen, region, &temporal)?;
     let resultado = captura::copiar_al_portapapeles(&temporal);
     let _ = std::fs::remove_file(&temporal);
@@ -341,7 +344,7 @@ pub fn guardar_anotada(pedido: tauri::ipc::Request<'_>) -> Result<String, String
 #[tauri::command]
 pub fn copiar_anotada(pedido: tauri::ipc::Request<'_>) -> Result<(), String> {
     let bytes = bytes_de(&pedido)?;
-    let temporal = anotada::temporal();
+    let temporal = anotada::temporal("anotada")?;
     anotada::escribir(bytes, &temporal)?;
     let resultado = captura::copiar_al_portapapeles(&temporal);
     let _ = std::fs::remove_file(&temporal);

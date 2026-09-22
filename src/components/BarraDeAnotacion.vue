@@ -12,8 +12,10 @@ import {
 	admiteRelleno,
 	claveDe,
 	type Estilo,
+	GROSORES,
 	HERRAMIENTAS,
 	type Herramienta,
+	TAPADOS,
 	tapa,
 } from '@/tools/anotacion';
 
@@ -41,12 +43,6 @@ const emitir = defineEmits<{
  * dura tres segundos. Son los que se leen sobre casi cualquier fondo.
  */
 const COLORES = ['#e01b24', '#f5c211', '#33d17a', '#3584e4', '#ffffff', '#000000'];
-
-/** Los grosores, de trazo fino a marcador. */
-const GROSORES = [2, 4, 8, 16];
-
-/** Cuánto tapan, para las dos que tapan. */
-const TAPADOS = [6, 10, 16, 24];
 
 const medidas = computed(() => (props.herramienta && tapa(props.herramienta) ? TAPADOS : GROSORES));
 const conRelleno = computed(() => props.herramienta !== null && admiteRelleno(props.herramienta));

@@ -50,12 +50,50 @@ pub fn escribir(bytes: &[u8], destino: &Path) -> Result<(), String> {
         .map_err(|e| format!("no se pudo guardar {}: {e}", destino.display()))
 }
 
-/// Un archivo temporal para lo que sólo se va a copiar.
+/// Crea el archivo **vacío, privado y en exclusiva**.
+///
+/// Para los temporales, que van a `/tmp` y ahí escriben todos. Sin esto hay dos
+/// agujeros, y los dos importan justamente en una herramienta de capturas:
+///
+/// - `std::fs::write` crea con `0o666 & !umask`, o sea `0o644` con el umask
+///   habitual: una captura que alguien pidió **sólo copiar** queda un rato en el
+///   disco legible por cualquier otra cuenta de la máquina.
+/// - Si la ruta ya existe, escribir la sigue. Un enlace simbólico puesto antes
+///   por otro convierte «guardar la captura» en «escribirle su archivo».
+///
+/// `create_new` falla si ya hay algo, así que el enlace deja de servir, y el
+/// modo `0o600` cierra lo otro. Quien escriba después —`image::save`, o
+/// `escribir`— abre el archivo que ya existe y **no** le cambia los permisos.
+pub fn crear_privado(ruta: &Path) -> Result<(), String> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(ruta)
+        .map(|_| ())
+        .map_err(|e| format!("no se pudo crear {}: {e}", ruta.display()))
+}
+
+/// Un archivo temporal para lo que sólo se va a copiar, ya creado y privado.
 ///
 /// Quien copia quiere pegar, no acumular archivos que después hay que borrar a
-/// mano. Lleva el pid para que dos instancias no se pisen.
-pub fn temporal() -> PathBuf {
-    std::env::temp_dir().join(format!("vasak-shot-anotada-{}.png", std::process::id()))
+/// mano.
+///
+/// El nombre lleva el pid **y el reloj**: con el pid solo, dos capturas seguidas
+/// del mismo proceso piden el mismo nombre y la segunda choca contra el archivo
+/// de la primera, que `create_new` rechaza — y con razón.
+pub fn temporal(prefijo: &str) -> Result<PathBuf, String> {
+    let marca = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let ruta = std::env::temp_dir().join(format!(
+        "vasak-shot-{prefijo}-{}-{marca}.png",
+        std::process::id()
+    ));
+    crear_privado(&ruta)?;
+    Ok(ruta)
 }
 
 #[cfg(test)]
@@ -85,6 +123,46 @@ mod tests {
         assert!(!es_png(&FIRMA_PNG));
         // Ni un JPEG.
         assert!(!es_png(&[0xFF, 0xD8, 0xFF, 0xE0, 0, 0, 0, 0, 0]));
+    }
+
+    #[test]
+    fn el_temporal_no_lo_puede_leer_nadie_mas() {
+        // Una captura que alguien pidió **sólo copiar** no puede quedar en
+        // `/tmp` legible por las otras cuentas de la máquina.
+        use std::os::unix::fs::PermissionsExt;
+        let ruta = temporal("prueba").expect("tendría que haberse creado");
+        let modo = std::fs::metadata(&ruta).unwrap().permissions().mode() & 0o777;
+        assert_eq!(modo, 0o600, "quedó en {modo:o}");
+
+        // Y escribir encima no le cambia los permisos.
+        escribir(&un_png(), &ruta).unwrap();
+        let despues = std::fs::metadata(&ruta).unwrap().permissions().mode() & 0o777;
+        assert_eq!(despues, 0o600);
+
+        let _ = std::fs::remove_file(&ruta);
+    }
+
+    #[test]
+    fn el_temporal_no_pisa_lo_que_ya_esta() {
+        // Un enlace simbólico puesto antes por otro convertiría «guardar la
+        // captura» en «escribirle su archivo».
+        let ruta = temporal("ocupado").expect("tendría que haberse creado");
+        assert!(
+            crear_privado(&ruta).is_err(),
+            "tendría que haber fallado sobre un archivo que ya existe"
+        );
+        let _ = std::fs::remove_file(&ruta);
+    }
+
+    #[test]
+    fn dos_temporales_seguidos_no_chocan() {
+        // Con el pid solo, la segunda captura del mismo proceso chocaba contra
+        // el archivo de la primera.
+        let uno = temporal("seguidos").expect("uno");
+        let otro = temporal("seguidos").expect("otro");
+        assert_ne!(uno, otro);
+        let _ = std::fs::remove_file(&uno);
+        let _ = std::fs::remove_file(&otro);
     }
 
     #[test]

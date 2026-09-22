@@ -379,19 +379,21 @@ function alTeclado(evento: KeyboardEvent) {
 		return;
 	}
 
-	if (evento.key.toLowerCase() === 'z' && evento.ctrlKey) {
-		evento.preventDefault();
-		dibujo.value = evento.shiftKey
-			? historial.rehacer(dibujo.value)
-			: historial.deshacer(dibujo.value);
-		return;
-	}
-
 	// Con el panel abierto se está escribiendo una ruta: Intro la aplica y
 	// Ctrl+C copia texto. Que el atajo de la ventana se los lleve significaría
 	// guardar una captura desde adentro de un campo de texto.
 	if (panel.value) {
 		if (evento.key === 'Escape') panel.value = false;
+		return;
+	}
+
+	// Después de la guarda del panel: ahí se está escribiendo una ruta, y
+	// `Ctrl+Z` es el deshacer del campo de texto, no el del dibujo.
+	if (evento.key.toLowerCase() === 'z' && evento.ctrlKey) {
+		evento.preventDefault();
+		dibujo.value = evento.shiftKey
+			? historial.rehacer(dibujo.value)
+			: historial.deshacer(dibujo.value);
 		return;
 	}
 
@@ -649,7 +651,7 @@ const estilo = computed(() => {
 			type="text"
 			class="absolute rounded-corner border border-primary bg-ui-bg/90 px-1 text-tx-main"
 			:style="{ left: `${escribiendo.punto.x}px`, top: `${escribiendo.punto.y}px` }"
-			@keydown.enter.prevent="cerrarTexto()"
+			@keydown.enter.stop.prevent="cerrarTexto()"
 			@blur="cerrarTexto()"
 		/>
 
