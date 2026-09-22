@@ -10,10 +10,22 @@
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useI18n } from '@vasakgroup/tauri-plugin-i18n';
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import BarraDeAnotacion from '@/components/BarraDeAnotacion.vue';
+import CapaDeAnotaciones from '@/components/CapaDeAnotaciones.vue';
 import Lupa from '@/components/Lupa.vue';
 import PanelPreferencias from '@/components/PanelPreferencias.vue';
 import Tiradores from '@/components/Tiradores.vue';
+import {
+	type Anotacion,
+	type Estilo,
+	esDeUnPunto,
+	estiloPorOmision,
+	type Herramienta,
+	proximoNumero,
+} from '@/tools/anotacion';
+import { comenzar, continuar, vale } from '@/tools/gesto';
+import * as historial from '@/tools/historial';
 import { interpolar } from '@/tools/interpolar';
 import { type Lienzo, medidaEnCss } from '@/tools/lienzo';
 import {
@@ -83,6 +95,46 @@ const puntero = ref<Punto | null>(null);
 
 /** Las ventanas que había cuando se tomó la captura. Vacía si no se pudo saber. */
 const ventanas = ref<Ventana[]>([]);
+
+/** Qué se dibuja. Nulo es el modo en el que se ajusta la selección. */
+const herramienta = ref<Herramienta | null>(null);
+
+/** Lo dibujado, con su historial. */
+const dibujo = ref<historial.Historial>(historial.crear());
+
+/** Lo que se está dibujando ahora mismo, todavía sin cerrar. */
+const enCurso = ref<Anotacion | null>(null);
+
+/** El texto que se está escribiendo, si es que se está escribiendo alguno. */
+const escribiendo = ref<{ punto: Punto; texto: string } | null>(null);
+
+/**
+ * El color, el grosor y el relleno de cada herramienta.
+ *
+ * Por herramienta y no uno solo: elegir rojo para la flecha no tiene por qué
+ * cambiar el del resaltador. Arranca vacío y cada una se estrena con lo suyo.
+ */
+const estilos = ref<Partial<Record<Herramienta, Estilo>>>({});
+
+/** El color con el que se estrena cualquier herramienta. */
+const COLOR_INICIAL = '#e01b24';
+
+const estiloActual = computed<Estilo>(() => {
+	const tipo = herramienta.value;
+	if (!tipo) return { color: COLOR_INICIAL, grosor: 3, relleno: false };
+	return estilos.value[tipo] ?? estiloPorOmision(tipo, COLOR_INICIAL);
+});
+
+/** El lienzo de anotación, para pedirle el PNG al entregar. */
+const capa = ref<{ exportar: () => Promise<Uint8Array> } | null>(null);
+
+/** El campo del texto, para darle el foco en cuanto aparece. */
+const campoDeTexto = ref<HTMLInputElement | null>(null);
+
+const puedeDeshacer = computed(() => historial.puedeDeshacer(dibujo.value));
+const puedeRehacer = computed(() => historial.puedeRehacer(dibujo.value));
+const deshacerDibujo = historial.deshacer;
+const rehacerDibujo = historial.rehacer;
 
 /** Las preferencias, con las de siempre mientras el backend no conteste. */
 const ajustes = ref<Ajustes>(POR_OMISION);
@@ -159,6 +211,14 @@ function empezar(evento: MouseEvent) {
 	// la ventana que estaba debajo.
 	puntero.value = punto;
 
+	// Con una herramienta tomada, adentro de la selección se dibuja. Ajustar la
+	// selección vuelve a estar a mano soltando la herramienta, que es lo que
+	// hace el primer botón de la barra.
+	if (herramienta.value && seleccion.value && contiene(seleccion.value, punto)) {
+		empezarADibujar(herramienta.value, punto);
+		return;
+	}
+
 	// Adentro de lo ya elegido, arrastrar lo **mueve**. Empezar uno nuevo desde
 	// ahí sería no poder corregir la posición sin rehacer la selección entera,
 	// que es justamente lo que se quiso evitar.
@@ -173,6 +233,31 @@ function empezar(evento: MouseEvent) {
 	seleccion.value = null;
 }
 
+/**
+ * Arranca una anotación.
+ *
+ * Las de un punto no tienen arrastre: el texto abre su campo y el paso queda
+ * puesto ahí mismo, con el número que le toca.
+ */
+function empezarADibujar(tipo: Herramienta, punto: Punto) {
+	if (tipo === 'texto') {
+		escribiendo.value = { punto, texto: '' };
+		return;
+	}
+	const anotacion = comenzar(tipo, punto, estiloActual.value, proximoNumero(dibujo.value.items));
+	if (esDeUnPunto(tipo)) {
+		cerrarAnotacion(anotacion);
+		return;
+	}
+	enCurso.value = anotacion;
+}
+
+/** Cierra la anotación y la suma al historial, si vale la pena guardarla. */
+function cerrarAnotacion(anotacion: Anotacion) {
+	if (vale(anotacion)) dibujo.value = historial.agregar(dibujo.value, anotacion);
+	enCurso.value = null;
+}
+
 /** Agarra un tirador. El arrastre lo sigue `mover`, como el de la región. */
 function tomarTirador(rol: Rol, evento: MouseEvent) {
 	if (!seleccion.value) return;
@@ -182,6 +267,11 @@ function tomarTirador(rol: Rol, evento: MouseEvent) {
 function mover(evento: MouseEvent) {
 	const punto = puntoDe(evento);
 	puntero.value = punto;
+
+	if (enCurso.value) {
+		enCurso.value = continuar(enCurso.value, punto);
+		return;
+	}
 
 	if (ajuste.value) {
 		// Contra la región y el punto de cuando se agarró, no contra los de
@@ -215,6 +305,11 @@ function mover(evento: MouseEvent) {
  * Y con `esperar` no entrega nada tampoco acá: quedan los botones.
  */
 async function terminar() {
+	if (enCurso.value) {
+		cerrarAnotacion(enCurso.value);
+		return;
+	}
+
 	if (ajuste.value) {
 		ajuste.value = null;
 		return;
@@ -244,13 +339,27 @@ async function salir() {
 	await getCurrentWindow().close();
 }
 
+/**
+ * Entrega lo elegido.
+ *
+ * Con anotaciones va **el mapa de bits ya compuesto**, no la región: lo que se
+ * guarda tiene que ser exactamente lo que se vio, y el único dibujante es el
+ * canvas. Sin anotaciones sigue yendo la región y nada más, que son cuatro
+ * números: el PNG pesa megabytes y no hay por qué cruzarlos cuando nadie dibujó.
+ */
 async function entregar(comando: Comando) {
 	const r = aEntregar.value;
 	if (!r || trabajando.value) return;
 	trabajando.value = true;
 	error.value = '';
 	try {
-		const ruta = await invoke<string | null>(comando, { region: r });
+		// Con anotaciones, los bytes van solos como cuerpo crudo del pedido:
+		// adentro de un JSON serían una lista de números y costarían un orden de
+		// magnitud más.
+		const lienzoDeAnotacion = dibujo.value.items.length > 0 ? capa.value : null;
+		const ruta = lienzoDeAnotacion
+			? await invoke<string | null>(`${comando}_anotada`, await lienzoDeAnotacion.exportar())
+			: await invoke<string | null>(comando, { region: r });
 		aviso.value =
 			comando === 'copiar' ? t('shot.copiada') : interpolar(t('shot.guardadaEn'), ruta ?? '');
 		// Se cierra sola: la captura ya está donde tenía que estar, y dejar la
@@ -263,6 +372,21 @@ async function entregar(comando: Comando) {
 }
 
 function alTeclado(evento: KeyboardEvent) {
+	// Escribiendo un texto, las teclas son del campo. Que el atajo de la
+	// ventana se lleve la «c» de «captura» sería copiar en vez de escribir.
+	if (escribiendo.value) {
+		if (evento.key === 'Escape') escribiendo.value = null;
+		return;
+	}
+
+	if (evento.key.toLowerCase() === 'z' && evento.ctrlKey) {
+		evento.preventDefault();
+		dibujo.value = evento.shiftKey
+			? historial.rehacer(dibujo.value)
+			: historial.deshacer(dibujo.value);
+		return;
+	}
+
 	// Con el panel abierto se está escribiendo una ruta: Intro la aplica y
 	// Ctrl+C copia texto. Que el atajo de la ventana se los lleve significaría
 	// guardar una captura desde adentro de un campo de texto.
@@ -280,6 +404,24 @@ function alTeclado(evento: KeyboardEvent) {
 	} else if (evento.key === 'c' && evento.ctrlKey) {
 		void entregar('copiar');
 	}
+}
+
+/** Cierra el texto que se está escribiendo, si dice algo. */
+function cerrarTexto() {
+	const abierto = escribiendo.value;
+	if (!abierto) return;
+	escribiendo.value = null;
+	cerrarAnotacion({
+		...comenzar('texto', abierto.punto, estiloActual.value),
+		texto: abierto.texto,
+	});
+}
+
+/** Guarda el estilo elegido para la herramienta que está tomada. */
+function cambiarEstilo(estilo: Estilo) {
+	const tipo = herramienta.value;
+	if (!tipo) return;
+	estilos.value = { ...estilos.value, [tipo]: estilo };
 }
 
 /** Cuánto se mueve de un tecleo. Diez con Mayús, para cruzar la pantalla. */
@@ -385,6 +527,12 @@ onMounted(async () => {
 	}
 });
 
+watch(escribiendo, async (abierto) => {
+	if (!abierto) return;
+	await nextTick();
+	campoDeTexto.value?.focus();
+});
+
 onUnmounted(() => window.removeEventListener('keydown', alTeclado));
 
 /**
@@ -474,8 +622,48 @@ const estilo = computed(() => {
 			<!-- Los tiradores, sólo con el gesto terminado: mientras se
 			     arrastra la región ya sigue al puntero y ocho puntos moviéndose
 			     con ella son ruido. -->
-			<Tiradores v-if="!arrastre" @tomar="tomarTirador" />
+			<Tiradores v-if="!arrastre && !herramienta" @tomar="tomarTirador" />
 		</div>
+
+		<!-- El lienzo de anotación va **después** del recuadro de la selección:
+		     tapa la región con su propia copia de la captura, que es lo que deja
+		     que las zonas tapadas lean píxeles. -->
+		<CapaDeAnotaciones
+			v-if="seleccion && lienzo && fondo"
+			ref="capa"
+			:region="seleccion"
+			:lienzo="lienzo"
+			:fondo="fondo"
+			:anotaciones="dibujo.items"
+			:en-curso="enCurso"
+		/>
+
+		<!-- El campo del texto, donde se hizo clic. Con foco automático: abrirlo
+		     y tener que hacer un clic más para escribir sería un paso de más en
+		     un gesto de tres segundos. -->
+		<input
+			v-if="escribiendo"
+			ref="campoDeTexto"
+			v-model="escribiendo.texto"
+			data-sin-arrastre
+			type="text"
+			class="absolute rounded-corner border border-primary bg-ui-bg/90 px-1 text-tx-main"
+			:style="{ left: `${escribiendo.punto.x}px`, top: `${escribiendo.punto.y}px` }"
+			@keydown.enter.prevent="cerrarTexto()"
+			@blur="cerrarTexto()"
+		/>
+
+		<BarraDeAnotacion
+			v-if="seleccion && !panel"
+			:herramienta="herramienta"
+			:estilo="estiloActual"
+			:puede-deshacer="puedeDeshacer"
+			:puede-rehacer="puedeRehacer"
+			@elegir="herramienta = $event"
+			@estilo="cambiarEstilo"
+			@deshacer="dibujo = deshacerDibujo(dibujo)"
+			@rehacer="dibujo = rehacerDibujo(dibujo)"
+		/>
 
 		<Lupa v-if="conLupa && puntero && lienzo" :punto="puntero" :lienzo="lienzo" :fondo="fondo" />
 

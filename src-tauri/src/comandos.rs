@@ -1,5 +1,6 @@
 //! Lo que el frontend puede pedir.
 
+use crate::anotada;
 use crate::captura::{self, Region, Salida};
 use crate::destino;
 use crate::preferencias::{self as prefs, AlSoltar};
@@ -311,6 +312,55 @@ fn avisar(ruta: &std::path::Path) {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
+}
+
+/// Los bytes crudos de un pedido, o un error que se entienda.
+///
+/// El cuerpo llega crudo y no adentro de un JSON: son megabytes, y como lista
+/// de números costarían un orden de magnitud más. Ver `anotada`.
+fn bytes_de<'a>(pedido: &'a tauri::ipc::Request<'a>) -> Result<&'a [u8], String> {
+    match pedido.body() {
+        tauri::ipc::InvokeBody::Raw(bytes) => Ok(bytes),
+        tauri::ipc::InvokeBody::Json(_) => {
+            Err("la captura anotada tiene que viajar como bytes".to_string())
+        }
+    }
+}
+
+/// Guarda la captura ya compuesta por el selector.
+#[tauri::command]
+pub fn guardar_anotada(pedido: tauri::ipc::Request<'_>) -> Result<String, String> {
+    let bytes = bytes_de(&pedido)?;
+    let final_ = destino::carpeta()?.join(destino::nombre_de_ahora());
+    anotada::escribir(bytes, &final_)?;
+    avisar(&final_);
+    Ok(final_.to_string_lossy().into_owned())
+}
+
+/// Copia la captura ya compuesta, sin dejar archivo en la carpeta.
+#[tauri::command]
+pub fn copiar_anotada(pedido: tauri::ipc::Request<'_>) -> Result<(), String> {
+    let bytes = bytes_de(&pedido)?;
+    let temporal = anotada::temporal();
+    anotada::escribir(bytes, &temporal)?;
+    let resultado = captura::copiar_al_portapapeles(&temporal);
+    let _ = std::fs::remove_file(&temporal);
+    resultado
+}
+
+/// Guarda **y** copia la captura ya compuesta.
+#[tauri::command]
+pub fn guardar_y_copiar_anotada(pedido: tauri::ipc::Request<'_>) -> Result<String, String> {
+    let bytes = bytes_de(&pedido)?;
+    let final_ = destino::carpeta()?.join(destino::nombre_de_ahora());
+    anotada::escribir(bytes, &final_)?;
+    // Si el portapapeles falla, la captura ya está guardada: se informa el
+    // archivo igual en lugar de perder las dos cosas por una.
+    if let Err(e) = captura::copiar_al_portapapeles(&final_) {
+        eprintln!("vasak-shot: no se pudo copiar al portapapeles: {e}");
+    }
+    avisar(&final_);
+    Ok(final_.to_string_lossy().into_owned())
 }
 
 /// Guarda **y** copia, que es lo que se quiere casi siempre.

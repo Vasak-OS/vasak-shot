@@ -37,12 +37,68 @@ de entregarla:
 | Flechas | Corren la selección un píxel; con **Mayús**, diez |
 | **Ctrl**+flechas | Mueven el borde de abajo a la derecha, o sea redimensionan |
 
+Los tiradores aparecen con la barra de anotación en «Ajustar»: con una
+herramienta tomada, arrastrar adentro dibuja.
+
 Cruzar un borde más allá del opuesto **da vuelta** la selección en lugar de
 dejarla en cero, y nada se puede sacar de la pantalla.
 
 Mientras se elige o se corrige aparece una **lupa** con la captura ampliada y las
 coordenadas: es lo que permite parar en el píxel que se quiere y no en el de al
 lado. Se da vuelta sola contra los bordes, que es justo donde más se la necesita.
+
+## Anotar
+
+Con la selección hecha aparece la barra: diez herramientas —recuadro, elipse,
+línea, flecha, lápiz, resaltador, texto, pasos numerados, difuminar y pixelar—,
+el color, el grosor y **deshacer** (`Ctrl+Z`, y `Ctrl+Mayús+Z` para rehacer).
+El recuadro y la elipse van rellenos o al aire.
+
+El color, el grosor y el relleno se recuerdan **por herramienta**: elegir rojo
+para la flecha no cambia el del resaltador.
+
+El primer botón de la barra suelta la herramienta y vuelve al modo en el que se
+ajusta la selección, que es donde están los tiradores.
+
+**Las anotaciones son datos hasta el final.** Lo que se dibuja es una lista de
+formas con su color y su grosor, no píxeles: de ahí sale deshacer, y de ahí sale
+que el archivo se componga una sola vez.
+
+### Tapar lo que no se comparte
+
+Difuminar y pixelar no dibujan encima: **transforman los píxeles de abajo**. Eso
+trae dos cosas que importan.
+
+**El orden se respeta.** Una flecha dibujada antes de un difuminado que la cruza
+queda difuminada; dibujada después, queda nítida encima.
+
+**Y lo tapado queda tapado de verdad.** Las intensidades por omisión están
+elegidas mirando un renglón de terminal —que es lo que de verdad se comparte— y
+no una cara en una foto: un difuminado flojo sobre texto grande se lee igual, y
+un mosaico chico sobre texto monoespaciado se puede revertir. Hay pruebas que lo
+comprueban midiendo el contraste que queda.
+
+## Por qué el archivo lo compone el selector y no Rust
+
+Lo que se guarda es **el mismo mapa de bits que se ve**: el canvas de la
+anotación se arma en el tamaño real de la captura y ése es el archivo.
+
+El plan era al revés —mandar la lista de anotaciones y pintarlas en Rust, para no
+cruzar megabytes por el IPC— y no se sostiene, por dos razones que aparecen al
+escribirlo:
+
+- El canvas suaviza los bordes de todo lo que dibuja y un dibujante de píxeles a
+  mano no. Cada recuadro y cada flecha saldrían distintos de como se vieron.
+- El texto necesita una fuente y sus métricas. Hacer coincidir la tipografía del
+  navegador con la de un rasterizador de Rust es una pelea que no se gana.
+
+Y tapar una zona **exige** que la vista previa y el archivo coincidan: la única
+manera de que coincidan siempre es que sean la misma composición.
+
+El costo es el que se quería evitar, acotado: el PNG cruza el IPC por el canal
+**crudo** de Tauri —el cuerpo entero del pedido son los bytes, no un JSON con una
+lista de números— y sólo cuando hay algo dibujado. Sin anotaciones sigue viajando
+la región y nada más, que son cuatro números.
 
 ## Preferencias
 
@@ -155,7 +211,6 @@ Sin wayfire la lista queda vacía, no se resalta nada y queda el arrastre.
 
 ## Lo que falta
 
-- **Anotar**: flechas, recuadros, difuminar una zona antes de compartir.
 - **Retardo** antes de capturar, para poder abrir un menú.
 
 ## Licencia

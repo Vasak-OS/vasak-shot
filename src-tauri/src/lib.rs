@@ -13,6 +13,7 @@
 //! instante ya está en disco, y la selección se hace sobre una imagen quieta en
 //! lugar de sobre una pantalla que sigue cambiando debajo.
 
+pub mod anotada;
 pub mod captura;
 pub mod comandos;
 pub mod destino;
@@ -303,6 +304,9 @@ pub fn run() {
             comandos::ajustes,
             comandos::guardar_ajustes,
             comandos::ventanas,
+            comandos::guardar_anotada,
+            comandos::copiar_anotada,
+            comandos::guardar_y_copiar_anotada,
         ])
         .setup(|app| {
             // El layer-shell tiene que correr en el hilo principal —GTK aborta
