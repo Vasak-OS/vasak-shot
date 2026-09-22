@@ -51,18 +51,19 @@
 use std::path::{Path, PathBuf};
 
 /// Una captura ya tomada, esperando en disco.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Captura {
     pub ruta: PathBuf,
     pub ancho: u32,
     pub alto: u32,
-    /// Las salidas que entraron en la composición, en coordenadas del layout.
+    /// Las salidas que entraron en la composición, en coordenadas del layout,
+    /// con sus píxeles sin estirar cuando la composición los estiró.
     ///
     /// Van con la captura y no se preguntan de nuevo: son las que había en ese
     /// instante, igual que los píxeles y que las ventanas. Un monitor
     /// desenchufado entre la captura y la elección dejaría `--salida` apuntando
     /// a un rectángulo que la imagen no tiene.
-    pub salidas: Vec<Monitor>,
+    pub copias: Vec<crate::pantalla::Copia>,
 }
 
 /// Una región elegida con el ratón.
@@ -76,6 +77,16 @@ pub struct Region {
     pub y: i32,
     pub ancho: i32,
     pub alto: i32,
+}
+
+impl Captura {
+    /// Las salidas que entraron, sin sus píxeles.
+    ///
+    /// Es lo que cruza al frontend y lo que `--salida` busca por nombre; los
+    /// mapas de bits se quedan de este lado.
+    pub fn salidas(&self) -> Vec<Monitor> {
+        self.copias.iter().map(|c| c.salida.clone()).collect()
+    }
 }
 
 impl Region {
@@ -372,9 +383,16 @@ pub fn nombre_de(salidas: &[Monitor], area: Salida) -> Option<&str> {
 /// layout— en lugar de leer el factor de escala de cada salida, porque lo que
 /// importa es la relación que de verdad quedó, no la que debería haber quedado.
 ///
-/// Con salidas de escalas distintas `grim` compone a la mayor, así que esta razón
-/// única deja de ser exacta para las de menor escala. Es el caso raro y no lo
-/// cubre esta cuenta; hacerlo bien exige capturar salida por salida con `grim -o`.
+/// **Con salidas de escalas distintas esta razón sigue siendo exacta**, y vale
+/// decir por qué porque acá decía lo contrario: `componer` lleva *todas* las
+/// pantallas a la escala mayor, así que la imagen mide exactamente el layout por
+/// esta razón y la traducción de una selección cae donde tiene que caer, esté en
+/// la pantalla que esté. Hay una prueba que lo fija.
+///
+/// Lo que sí cambia con escalas distintas es de dónde conviene sacar los
+/// píxeles: la de menor escala entra **estirada** en el lienzo, y recortar de
+/// ahí da una imagen más grande y borrosa que la que se eligió. Para eso está
+/// `pantalla::Copia`, que guarda los de verdad.
 pub fn escala_de(imagen: (u32, u32), layout: Salida) -> (f64, f64) {
     let ex = if layout.ancho > 0 {
         f64::from(imagen.0) / f64::from(layout.ancho)
@@ -419,7 +437,7 @@ pub fn capturar(destino: &Path) -> Result<Captura, String> {
         ruta: destino.to_path_buf(),
         ancho,
         alto,
-        salidas: lienzo.salidas,
+        copias: lienzo.copias,
     })
 }
 
@@ -430,17 +448,34 @@ pub fn capturar(destino: &Path) -> Result<Captura, String> {
 /// uno posterior— y porque la geometría de `grim` está en coordenadas del layout
 /// de salidas, que no son las de la pantalla.
 pub fn recortar(origen: &Path, region: Region, destino: &Path) -> Result<(), String> {
-    let imagen =
-        image::open(origen).map_err(|e| format!("no se pudo leer {}: {e}", origen.display()))?;
+    // `into_rgba8` no copia nada cuando la imagen ya es RGBA de ocho bits, que
+    // es lo que esta aplicación escribe siempre. Convertir acá deja una sola
+    // implementación del recorte, la de abajo, en lugar de una por cada tipo de
+    // origen.
+    let imagen = image::open(origen)
+        .map_err(|e| format!("no se pudo leer {}: {e}", origen.display()))?
+        .into_rgba8();
 
-    let (ancho, alto) = (imagen.width(), imagen.height());
+    recortar_imagen(&imagen, region, destino)
+}
+
+/// Lo mismo, con la imagen ya en memoria.
+///
+/// Es por donde salen los píxeles de una pantalla que el lienzo estiró: los de
+/// verdad no están en el archivo compuesto, así que no hay nada que abrir.
+pub fn recortar_imagen(
+    imagen: &image::RgbaImage,
+    region: Region,
+    destino: &Path,
+) -> Result<(), String> {
+    let (ancho, alto) = imagen.dimensions();
     let region = region
         .recortada_a(ancho, alto)
         .ok_or_else(|| "la selección quedó fuera de la imagen".to_string())?;
 
     // `to_image` copia sólo la región, no la imagen entera.
     let recorte = image::imageops::crop_imm(
-        &imagen,
+        imagen,
         region.x as u32,
         region.y as u32,
         region.ancho as u32,

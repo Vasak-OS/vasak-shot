@@ -234,10 +234,11 @@ fn region_directa(
             alto: tomada.alto as i32,
         })),
         Modo::Salida(nombre) => {
-            let layout = captura::layout_de(&tomada.salidas);
+            let salidas = tomada.salidas();
+            let layout = captura::layout_de(&salidas);
             let escala = captura::escala_de((tomada.ancho, tomada.alto), layout);
             Some(
-                captura::buscar(&tomada.salidas, nombre)
+                captura::buscar(&salidas, nombre)
                     .map(|salida| salida.en_la_captura(layout, escala)),
             )
         }
@@ -296,7 +297,7 @@ pub fn run() {
 
     // Las pantallas que entraron en la captura, para poder resaltar la que se
     // está mirando y ofrecer las otras sin volver a lanzar la herramienta.
-    comandos::recordar_salidas(tomada.salidas.clone());
+    comandos::recordar_salidas(tomada.salidas());
     comandos::recordar(tomada);
 
     // Las ventanas, **en el mismo momento que los píxeles** y antes de que
@@ -496,6 +497,14 @@ mod tests {
         assert!(x > i32::MIN && y > i32::MIN, "({x}, {y})");
     }
 
+    /// Una pantalla que el lienzo no tuvo que estirar, que es el caso normal.
+    fn sin_estirar(nombre: &str, area: Salida) -> pantalla::Copia {
+        pantalla::Copia {
+            salida: captura::Monitor::nuevo(nombre, area),
+            nativos: None,
+        }
+    }
+
     /// Una captura de mentira con dos pantallas, para probar `--salida`.
     ///
     /// El origen del layout en negativo a propósito: un monitor puesto a la
@@ -506,8 +515,8 @@ mod tests {
             ruta: std::path::PathBuf::from("/tmp/de-mentira.png"),
             ancho: 3840,
             alto: 1080,
-            salidas: vec![
-                captura::Monitor::nuevo(
+            copias: vec![
+                sin_estirar(
                     "DP-1",
                     Salida {
                         x: -1920,
@@ -516,7 +525,7 @@ mod tests {
                         alto: 1080,
                     },
                 ),
-                captura::Monitor::nuevo(
+                sin_estirar(
                     "HDMI-A-1",
                     Salida {
                         x: 0,

@@ -24,6 +24,19 @@ export interface Lienzo {
 	/** Píxeles de la captura por unidad del layout, por eje. */
 	escalaX: number;
 	escalaY: number;
+	/**
+	 * Píxeles de verdad de **esta** pantalla por unidad del layout.
+	 *
+	 * Casi siempre es la misma que la de la captura, y con un solo monitor lo es
+	 * siempre. Se separan porque la captura se compone en la escala **mayor** de
+	 * todas las pantallas: en una de menor escala, la de la captura dice el doble
+	 * de píxeles de los que esa pantalla tiene de verdad.
+	 *
+	 * Es la que manda para el archivo que se entrega, porque es la que dice
+	 * cuántos píxeles existen.
+	 */
+	escalaPropiaX: number;
+	escalaPropiaY: number;
 }
 
 /**
