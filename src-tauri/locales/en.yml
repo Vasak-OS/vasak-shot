@@ -11,7 +11,7 @@ inicio:
   saludo: "Hello, {0}"
 shot:
   errorImagen: The screenshot could not be displayed. That is a configuration problem, not a screen problem.
-  instruccion: Drag to choose an area, or save the whole screen
+  instruccion: Drag to choose an area, or click for the whole screen
   copiar: Copy
   guardar: Save
   cancelar: Cancel
@@ -30,7 +30,7 @@ shot:
   alSoltarCopiar: Copy to the clipboard
   alSoltarEsperar: Wait, and decide with the buttons
   carpeta: Folder to save into
-  instruccionConVentanas: Drag to choose an area, or click a window
+  instruccionConVentanas: Drag to choose an area, click a window, or click the background for the whole screen
   ajustar: Adjust
   relleno: Fill
   deshacer: Undo
@@ -45,3 +45,6 @@ shot:
   herramientaPaso: Step
   herramientaDifuminar: Blur
   herramientaPixelar: Pixelate
+  retardo: Delay
+  sinRetardo: No delay
+  pantalla: Screen

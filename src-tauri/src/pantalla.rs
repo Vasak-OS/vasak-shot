@@ -39,6 +39,7 @@
 //! Con escalas distintas entre pantallas, el lienzo va en la **mayor** de
 //! todas: bajar todo a la menor tiraría píxeles que existen.
 
+use crate::captura::{Monitor, Salida};
 use std::collections::HashMap;
 use std::fs::File;
 use std::os::fd::{AsFd, OwnedFd};
@@ -65,6 +66,13 @@ use wayland_protocols_wlr::screencopy::v1::client::{
 /// Una pantalla, con lo que hace falta para ubicarla y copiarla.
 #[derive(Default)]
 struct Pantalla {
+    /// Cómo la llama el compositor: `HDMI-A-1`, `eDP-1`. De `xdg_output`.
+    ///
+    /// Opcional porque el evento `name` existe desde la versión 2 del
+    /// protocolo. Con una más vieja no hay nombre y `componer` le pone uno por
+    /// posición, que es peor para escribirlo a mano pero deja que `--salida`
+    /// siga sirviendo para algo.
+    nombre: Option<String>,
     /// Dónde empieza en el layout. De `xdg_output`.
     ///
     /// Va separada del tamaño porque llegan en **dos eventos distintos**, y
@@ -103,9 +111,15 @@ struct Estado {
     de_frame: HashMap<u32, u32>,
 }
 
-/// El lienzo compuesto: lo que se guarda como PNG.
+/// El lienzo compuesto: lo que se guarda como PNG, y qué hay adentro.
 pub struct Lienzo {
     pub imagen: RgbaImage,
+    /// Las salidas que entraron, con su nombre y su lugar en el layout.
+    ///
+    /// Sólo las que se pudieron copiar: una que el compositor no quiso copiar
+    /// no está en la imagen, y ofrecerla para `--salida` sería ofrecer un
+    /// recorte de píxeles negros.
+    pub salidas: Vec<Monitor>,
 }
 
 /// Pide una copia de cada pantalla y las pega donde el layout las tiene.
@@ -221,20 +235,27 @@ impl Estado {
     }
 }
 
-/// Lo que hace falta de una pantalla para pegarla: dónde va y qué píxeles tiene.
-type Puesta<'a> = ((i32, i32, i32, i32), &'a RgbaImage);
+/// Lo que hace falta de una pantalla para pegarla: cómo se llama, dónde va y
+/// qué píxeles tiene.
+type Puesta<'a> = (Option<&'a str>, (i32, i32, i32, i32), &'a RgbaImage);
 
 /// Pega cada pantalla en su lugar del layout.
 fn componer(pantallas: &HashMap<u32, Pantalla>) -> Result<Lienzo, String> {
-    let utiles: Vec<Puesta<'_>> = pantallas
+    let mut utiles: Vec<Puesta<'_>> = pantallas
         .values()
         .filter_map(|p| match (p.posicion, p.tamanio, &p.pixeles) {
             (Some((x, y)), Some((ancho, alto)), Some(pixeles)) if !p.fallada => {
-                Some(((x, y, ancho, alto), pixeles))
+                Some((p.nombre.as_deref(), (x, y, ancho, alto), pixeles))
             }
             _ => None,
         })
         .collect();
+
+    // De arriba abajo y de izquierda a derecha. El orden no cambia la imagen
+    // —cada pantalla se pega en su lugar— pero sí la lista que sale de acá, y
+    // esa se muestra en el selector y se nombra en `--salida`. Sin ordenar
+    // saldría en el orden de un `HashMap`, o sea distinto en cada ejecución.
+    utiles.sort_by_key(|(_, l, _)| (l.1, l.0));
 
     if utiles.is_empty() {
         // Los motivos de las que fallaron, que es lo único que se sabe de por
@@ -251,24 +272,43 @@ fn componer(pantallas: &HashMap<u32, Pantalla>) -> Result<Lienzo, String> {
         });
     }
 
-    let x0 = utiles.iter().map(|(l, _)| l.0).min().unwrap_or(0);
-    let y0 = utiles.iter().map(|(l, _)| l.1).min().unwrap_or(0);
-    let x1 = utiles.iter().map(|(l, _)| l.0 + l.2).max().unwrap_or(0);
-    let y1 = utiles.iter().map(|(l, _)| l.1 + l.3).max().unwrap_or(0);
+    let x0 = utiles.iter().map(|(_, l, _)| l.0).min().unwrap_or(0);
+    let y0 = utiles.iter().map(|(_, l, _)| l.1).min().unwrap_or(0);
+    let x1 = utiles.iter().map(|(_, l, _)| l.0 + l.2).max().unwrap_or(0);
+    let y1 = utiles.iter().map(|(_, l, _)| l.1 + l.3).max().unwrap_or(0);
 
     // La escala de cada pantalla sale de comparar sus píxeles con su tamaño
     // lógico, que es la única forma de enterarse de una escala fraccionaria: el
     // `scale` de `wl_output` es entero y miente cuando el compositor usa 1.25.
     let escala = utiles
         .iter()
-        .map(|(l, img)| f64::from(img.width()) / f64::from(l.2.max(1)))
+        .map(|(_, l, img)| f64::from(img.width()) / f64::from(l.2.max(1)))
         .fold(1.0_f64, f64::max);
 
     let ancho = ((f64::from(x1 - x0) * escala).round() as u32).max(1);
     let alto = ((f64::from(y1 - y0) * escala).round() as u32).max(1);
     let mut lienzo = RgbaImage::new(ancho, alto);
 
-    for (logica, pixeles) in utiles {
+    // Los nombres, antes de consumir la lista al pegar. Los que el compositor
+    // no dio se completan por posición: `pantalla-1` es la de más arriba a la
+    // izquierda. No sirve para reconocer el monitor, pero sí para nombrarlo.
+    let salidas: Vec<Monitor> = utiles
+        .iter()
+        .enumerate()
+        .map(|(i, (nombre, l, _))| {
+            Monitor::nuevo(
+                nombre.map_or_else(|| format!("pantalla-{}", i + 1), str::to_string),
+                Salida {
+                    x: l.0,
+                    y: l.1,
+                    ancho: l.2,
+                    alto: l.3,
+                },
+            )
+        })
+        .collect();
+
+    for (_, logica, pixeles) in utiles {
         let destino_x = ((f64::from(logica.0 - x0) * escala).round() as i64).max(0);
         let destino_y = ((f64::from(logica.1 - y0) * escala).round() as i64).max(0);
         let ancho_destino = ((f64::from(logica.2) * escala).round() as u32).max(1);
@@ -290,7 +330,10 @@ fn componer(pantallas: &HashMap<u32, Pantalla>) -> Result<Lienzo, String> {
         }
     }
 
-    Ok(Lienzo { imagen: lienzo })
+    Ok(Lienzo {
+        imagen: lienzo,
+        salidas,
+    })
 }
 
 /// Los formatos que esta conversión sabe leer.
@@ -403,6 +446,9 @@ impl Dispatch<ZxdgOutputV1, ()> for Estado {
             }
             zxdg_output_v1::Event::LogicalSize { width, height } => {
                 pantalla.tamanio = Some((width, height));
+            }
+            zxdg_output_v1::Event::Name { name } => {
+                pantalla.nombre = Some(name);
             }
             _ => {}
         }
@@ -590,6 +636,14 @@ mod pruebas {
             tamanio: Some((logica.2, logica.3)),
             pixeles: Some(imagen),
             ..Pantalla::default()
+        }
+    }
+
+    /// Lo mismo, con el nombre que el compositor le habría dado.
+    fn pantalla_llamada(nombre: &str, logica: (i32, i32, i32, i32), imagen: RgbaImage) -> Pantalla {
+        Pantalla {
+            nombre: Some(nombre.to_string()),
+            ..pantalla(logica, imagen)
         }
     }
 
@@ -872,5 +926,79 @@ mod pruebas {
     fn sin_ninguna_pantalla_copiada_se_dice() {
         let pantallas = HashMap::new();
         assert!(componer(&pantallas).is_err());
+    }
+
+    #[test]
+    fn las_pantallas_salen_nombradas_y_ubicadas() {
+        // Es lo que `--salida` necesita para elegir una, y el selector para
+        // decir cuál se está mirando.
+        let mut pantallas = HashMap::new();
+        pantallas.insert(
+            1,
+            pantalla_llamada(
+                "HDMI-A-1",
+                (0, 50, 100, 50),
+                lisa(100, 50, [0, 0, 255, 255]),
+            ),
+        );
+        pantallas.insert(
+            2,
+            pantalla_llamada("eDP-1", (0, 0, 100, 50), lisa(100, 50, [255, 0, 0, 255])),
+        );
+
+        let lienzo = componer(&pantallas).unwrap();
+
+        // Ordenadas de arriba abajo, no en el orden de un `HashMap`: la lista
+        // se muestra en el selector, y una que cambia de orden en cada
+        // ejecución obliga a leerla entera cada vez.
+        let nombres: Vec<&str> = lienzo.salidas.iter().map(|s| s.nombre.as_str()).collect();
+        assert_eq!(nombres, vec!["eDP-1", "HDMI-A-1"]);
+        assert_eq!(
+            lienzo.salidas[1].area(),
+            crate::captura::Salida {
+                x: 0,
+                y: 50,
+                ancho: 100,
+                alto: 50
+            }
+        );
+    }
+
+    #[test]
+    fn sin_nombre_del_compositor_se_las_llama_por_su_lugar() {
+        // Con `xdg_output` versión 1 no llega el evento `name`. Un nombre
+        // inventado no sirve para reconocer el monitor, pero sí para poder
+        // nombrarlo en `--salida`, que sin esto quedaría sin ninguna opción.
+        let mut pantallas = HashMap::new();
+        pantallas.insert(1, pantalla((0, 0, 100, 50), lisa(100, 50, [1, 2, 3, 255])));
+
+        let lienzo = componer(&pantallas).unwrap();
+        assert_eq!(lienzo.salidas[0].nombre, "pantalla-1");
+    }
+
+    #[test]
+    fn una_pantalla_que_fallo_no_se_ofrece() {
+        // No está en la imagen, así que pedirla daría un recorte de píxeles
+        // negros en vez de un error.
+        let mut pantallas = HashMap::new();
+        pantallas.insert(
+            1,
+            pantalla_llamada("eDP-1", (0, 0, 100, 50), lisa(100, 50, [255, 0, 0, 255])),
+        );
+        pantallas.insert(
+            2,
+            Pantalla {
+                fallada: true,
+                ..pantalla_llamada(
+                    "HDMI-A-1",
+                    (0, 50, 100, 50),
+                    lisa(100, 50, [0, 0, 255, 255]),
+                )
+            },
+        );
+
+        let lienzo = componer(&pantallas).unwrap();
+        let nombres: Vec<&str> = lienzo.salidas.iter().map(|s| s.nombre.as_str()).collect();
+        assert_eq!(nombres, vec!["eDP-1"]);
     }
 }

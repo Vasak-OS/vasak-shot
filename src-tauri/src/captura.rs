@@ -56,6 +56,13 @@ pub struct Captura {
     pub ruta: PathBuf,
     pub ancho: u32,
     pub alto: u32,
+    /// Las salidas que entraron en la composición, en coordenadas del layout.
+    ///
+    /// Van con la captura y no se preguntan de nuevo: son las que había en ese
+    /// instante, igual que los píxeles y que las ventanas. Un monitor
+    /// desenchufado entre la captura y la elección dejaría `--salida` apuntando
+    /// a un rectángulo que la imagen no tiene.
+    pub salidas: Vec<Monitor>,
 }
 
 /// Una región elegida con el ratón.
@@ -198,6 +205,158 @@ impl Salida {
     }
 }
 
+/// Una salida con el nombre con el que el compositor la nombra.
+///
+/// El nombre es el del conector —`HDMI-A-1`, `eDP-1`—, el mismo que muestran
+/// `wlr-randr` y los ajustes de pantalla. Inventar otro vocabulario para
+/// `--salida` obligaría a traducirlo a mano cada vez que alguien quiere saber
+/// cómo se llama su monitor.
+///
+/// Plana y no `{ nombre, area }` porque cruza al frontend igual que `Ventana`,
+/// y ahí un rectángulo anidado hay que desarmarlo en cada uso.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Monitor {
+    pub nombre: String,
+    pub x: i32,
+    pub y: i32,
+    pub ancho: i32,
+    pub alto: i32,
+}
+
+impl Monitor {
+    /// Un monitor a partir de su nombre y su rectángulo.
+    pub fn nuevo(nombre: impl Into<String>, area: Salida) -> Self {
+        Self {
+            nombre: nombre.into(),
+            x: area.x,
+            y: area.y,
+            ancho: area.ancho,
+            alto: area.alto,
+        }
+    }
+
+    /// El rectángulo que ocupa en el layout.
+    pub fn area(&self) -> Salida {
+        Salida {
+            x: self.x,
+            y: self.y,
+            ancho: self.ancho,
+            alto: self.alto,
+        }
+    }
+
+    /// Este monitor con el origen de `origen` restado.
+    ///
+    /// Es lo que lo lleva a coordenadas del selector, que es el espacio en el
+    /// que el frontend manda las regiones: la salida que el selector tapa queda
+    /// en (0, 0) y las demás alrededor, con las coordenadas que les toquen —
+    /// negativas las que estén arriba o a la izquierda. Ver `Region::en_la_captura`,
+    /// que deshace exactamente esta resta.
+    pub fn relativo_a(&self, origen: Salida) -> Self {
+        Self {
+            nombre: self.nombre.clone(),
+            x: self.x - origen.x,
+            y: self.y - origen.y,
+            ..*self
+        }
+    }
+
+    /// Esta salida entera, en píxeles de la captura compuesta.
+    ///
+    /// Pasa por `Region::en_la_captura` y no hace la cuenta de nuevo: es la
+    /// única traducción que hay, y tener una segunda que multiplica y suma por
+    /// su cuenta es tener dos que se separan.
+    pub fn en_la_captura(&self, layout: Salida, escala: (f64, f64)) -> Region {
+        Region {
+            x: 0,
+            y: 0,
+            ancho: self.ancho,
+            alto: self.alto,
+        }
+        .en_la_captura(self.area().relativa_a(layout), escala)
+    }
+}
+
+/// El rectángulo que abarcan todas estas salidas, con su origen.
+///
+/// El mismo encuadre que `grim` compone y que `lib.rs` calcula por GDK, pero a
+/// partir de lo que informó el propio protocolo de captura. Hace falta porque
+/// el camino de `--salida` no abre ninguna ventana: no hay display de GTK al
+/// que preguntarle.
+pub fn layout_de(salidas: &[Monitor]) -> Salida {
+    let Some(primera) = salidas.first() else {
+        // Sin salidas no hay rectángulo, y un cero es más honesto que un
+        // centinela: `escala_de` lo lee como «no sé» y contesta escala uno.
+        return Salida {
+            x: 0,
+            y: 0,
+            ancho: 0,
+            alto: 0,
+        };
+    };
+
+    let mut min_x = primera.x;
+    let mut min_y = primera.y;
+    let mut max_x = primera.x + primera.ancho;
+    let mut max_y = primera.y + primera.alto;
+
+    for s in &salidas[1..] {
+        min_x = min_x.min(s.x);
+        min_y = min_y.min(s.y);
+        max_x = max_x.max(s.x + s.ancho);
+        max_y = max_y.max(s.y + s.alto);
+    }
+
+    Salida {
+        x: min_x,
+        y: min_y,
+        ancho: max_x - min_x,
+        alto: max_y - min_y,
+    }
+}
+
+/// La salida que se llama así, o un error que dice cuáles hay.
+///
+/// El error lleva la lista entera a propósito: quien escribió mal el nombre no
+/// tiene de dónde sacarlo —los conectores no se muestran en ningún lado del
+/// escritorio— y un «no existe» a secas obliga a ir a buscarlo con otra
+/// herramienta.
+///
+/// Sin distinguir mayúsculas: el compositor dice `HDMI-A-1` y quien lo teclea
+/// escribe `hdmi-a-1`. Que eso falle no protege de nada.
+pub fn buscar<'a>(salidas: &'a [Monitor], nombre: &str) -> Result<&'a Monitor, String> {
+    salidas
+        .iter()
+        .find(|s| s.nombre.eq_ignore_ascii_case(nombre))
+        .ok_or_else(|| {
+            let nombres: Vec<&str> = salidas.iter().map(|s| s.nombre.as_str()).collect();
+            if nombres.is_empty() {
+                format!(
+                    "no hay ninguna pantalla que se llame «{nombre}», y no se pudo copiar ninguna"
+                )
+            } else {
+                format!(
+                    "no hay ninguna pantalla que se llame «{nombre}»; las que hay son: {}",
+                    nombres.join(", ")
+                )
+            }
+        })
+}
+
+/// La salida que ocupa exactamente ese rectángulo.
+///
+/// Por geometría y no por el nombre que dé GTK: `GdkMonitor::model()` devuelve
+/// el modelo del monitor en algunos backends y el conector en otros, así que
+/// comparar contra el nombre de `xdg_output` cruzaría dos vocabularios. La
+/// posición y el tamaño lógicos, en cambio, son el mismo número en los dos
+/// lados.
+pub fn nombre_de(salidas: &[Monitor], area: Salida) -> Option<&str> {
+    salidas
+        .iter()
+        .find(|s| s.area() == area)
+        .map(|s| s.nombre.as_str())
+}
+
 /// Cuántos píxeles de la captura hay por cada unidad del layout.
 ///
 /// Normalmente uno: el layout está en píxeles lógicos y `grim` compone a esa
@@ -255,6 +414,7 @@ pub fn capturar(destino: &Path) -> Result<Captura, String> {
         ruta: destino.to_path_buf(),
         ancho,
         alto,
+        salidas: lienzo.salidas,
     })
 }
 
@@ -343,6 +503,161 @@ pub fn copiar_al_portapapeles(ruta: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Dos monitores de 1920x1080, uno a la izquierda del primario.
+    ///
+    /// Con el origen en negativo a propósito: es donde la traducción se rompe
+    /// si alguien se olvida de restarlo, y es un layout que existe —un monitor
+    /// puesto a la izquierda es lo más común que hay.
+    fn dos() -> Vec<Monitor> {
+        vec![
+            Monitor::nuevo(
+                "DP-1",
+                Salida {
+                    x: -1920,
+                    y: 0,
+                    ancho: 1920,
+                    alto: 1080,
+                },
+            ),
+            Monitor::nuevo(
+                "HDMI-A-1",
+                Salida {
+                    x: 0,
+                    y: 0,
+                    ancho: 1920,
+                    alto: 1080,
+                },
+            ),
+        ]
+    }
+
+    #[test]
+    fn el_encuadre_abarca_todas_las_salidas() {
+        assert_eq!(
+            layout_de(&dos()),
+            Salida {
+                x: -1920,
+                y: 0,
+                ancho: 3840,
+                alto: 1080
+            }
+        );
+    }
+
+    #[test]
+    fn sin_salidas_el_encuadre_es_cero_y_no_un_centinela() {
+        // `escala_de` lee el cero como «no sé» y contesta escala uno. Un
+        // `i32::MAX` heredado de los mínimos daría una escala absurda.
+        assert_eq!(
+            layout_de(&[]),
+            Salida {
+                x: 0,
+                y: 0,
+                ancho: 0,
+                alto: 0
+            }
+        );
+    }
+
+    #[test]
+    fn una_salida_entera_se_recorta_donde_esta() {
+        let salidas = dos();
+        let layout = layout_de(&salidas);
+
+        assert_eq!(
+            salidas[0].en_la_captura(layout, (1.0, 1.0)),
+            Region {
+                x: 0,
+                y: 0,
+                ancho: 1920,
+                alto: 1080
+            }
+        );
+        assert_eq!(
+            salidas[1].en_la_captura(layout, (1.0, 1.0)),
+            Region {
+                x: 1920,
+                y: 0,
+                ancho: 1920,
+                alto: 1080
+            }
+        );
+    }
+
+    #[test]
+    fn con_escala_la_salida_se_recorta_en_pixeles_de_verdad() {
+        // Una pantalla al 200%: la imagen mide el doble, y pedirla entera tiene
+        // que dar los píxeles que existen y no la mitad.
+        let salidas = vec![Monitor::nuevo(
+            "eDP-1",
+            Salida {
+                x: 0,
+                y: 0,
+                ancho: 1920,
+                alto: 1080,
+            },
+        )];
+        assert_eq!(
+            salidas[0].en_la_captura(layout_de(&salidas), (2.0, 2.0)),
+            Region {
+                x: 0,
+                y: 0,
+                ancho: 3840,
+                alto: 2160
+            }
+        );
+    }
+
+    #[test]
+    fn buscar_una_salida_no_distingue_mayusculas() {
+        // El compositor dice `HDMI-A-1` y quien lo teclea escribe `hdmi-a-1`.
+        assert_eq!(
+            buscar(&dos(), "hdmi-a-1").map(|s| s.nombre.as_str()),
+            Ok("HDMI-A-1")
+        );
+    }
+
+    #[test]
+    fn una_salida_que_no_existe_dice_cuales_hay() {
+        // El nombre del conector no se muestra en ningún lado del escritorio:
+        // sin la lista hay que ir a buscarlo con otra herramienta.
+        let error = buscar(&dos(), "VGA-1").expect_err("ésa no está");
+        assert!(
+            error.contains("DP-1") && error.contains("HDMI-A-1"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn la_salida_se_reconoce_por_su_rectangulo() {
+        // Por geometría y no por el nombre que dé GTK, que en algunos backends
+        // es el modelo del monitor y no el conector.
+        let salidas = dos();
+        assert_eq!(nombre_de(&salidas, salidas[0].area()), Some("DP-1"));
+        assert_eq!(
+            nombre_de(
+                &salidas,
+                Salida {
+                    x: 7,
+                    y: 7,
+                    ancho: 800,
+                    alto: 600
+                }
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn llevarla_al_selector_la_deja_donde_el_layout_la_tiene() {
+        // Estando en la de la derecha, la otra queda en -1920: ése es el número
+        // que hace que pedirla recorte de la mitad izquierda de la captura.
+        let salidas = dos();
+        let relativa = salidas[0].relativo_a(salidas[1].area());
+        assert_eq!((relativa.x, relativa.y), (-1920, 0));
+        assert_eq!(relativa.nombre, "DP-1");
+    }
 
     #[test]
     fn arrastrar_en_cualquier_direccion_da_la_misma_region() {

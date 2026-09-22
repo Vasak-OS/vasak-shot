@@ -6,7 +6,7 @@
  * bajo el puntero.
  */
 
-import type { Punto, Region } from '@/tools/region';
+import type { Punto } from '@/tools/region';
 
 export interface Ventana {
 	x: number;
@@ -29,9 +29,4 @@ export function ventanaEn(ventanas: Ventana[], punto: Punto | null): Ventana | n
 			(v) => punto.x >= v.x && punto.x < v.x + v.ancho && punto.y >= v.y && punto.y < v.y + v.alto
 		) ?? null
 	);
-}
-
-/** El rectángulo de una ventana, como región elegida. */
-export function comoRegion(ventana: Ventana): Region {
-	return { x: ventana.x, y: ventana.y, ancho: ventana.ancho, alto: ventana.alto };
 }

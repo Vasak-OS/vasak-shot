@@ -68,6 +68,23 @@ export function aEntregar(
 	return { x: 0, y: 0, ancho: pantalla.ancho, alto: pantalla.alto };
 }
 
+/**
+ * Cualquier rectángulo, como región elegida.
+ *
+ * Una ventana señalada y una pantalla entera son lo mismo para quien elige: un
+ * rectángulo que ya está calculado y que sólo hay que entregar. Tener la
+ * conversión una sola vez es lo que evita que una de las dos se separe — que es
+ * como empezó a existir esta función, copiada en el módulo de ventanas.
+ */
+export function comoRegion(rectangulo: Region): Region {
+	return {
+		x: rectangulo.x,
+		y: rectangulo.y,
+		ancho: rectangulo.ancho,
+		alto: rectangulo.alto,
+	};
+}
+
 /** Las medidas para mostrar, como las lee una persona. */
 export function medidasDe(region: Region | null): string {
 	return region ? `${region.ancho} × ${region.alto}` : '';
