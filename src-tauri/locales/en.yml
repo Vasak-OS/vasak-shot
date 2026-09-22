@@ -31,3 +31,17 @@ shot:
   alSoltarEsperar: Wait, and decide with the buttons
   carpeta: Folder to save into
   instruccionConVentanas: Drag to choose an area, or click a window
+  ajustar: Adjust
+  relleno: Fill
+  deshacer: Undo
+  rehacer: Redo
+  herramientaRecuadro: Rectangle
+  herramientaElipse: Ellipse
+  herramientaLinea: Line
+  herramientaFlecha: Arrow
+  herramientaLapiz: Pen
+  herramientaResaltador: Highlighter
+  herramientaTexto: Text
+  herramientaPaso: Step
+  herramientaDifuminar: Blur
+  herramientaPixelar: Pixelate
