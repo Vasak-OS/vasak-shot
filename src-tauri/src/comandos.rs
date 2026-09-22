@@ -647,11 +647,17 @@ pub fn guardar_y_copiar_anotada(pedido: tauri::ipc::Request<'_>) -> Result<Strin
     let final_ = destino::carpeta()?.join(destino::nombre_de_ahora());
     anotada::escribir(bytes, &final_)?;
     // Si el portapapeles falla, la captura ya está guardada: se informa el
-    // archivo igual en lugar de perder las dos cosas por una.
-    if let Err(e) = captura::copiar_al_portapapeles(&final_) {
-        eprintln!("vasak-shot: no se pudo copiar al portapapeles: {e}");
-    }
-    avisar(&final_, true);
+    // archivo igual en lugar de perder las dos cosas por una. Y el aviso se
+    // entera, porque si la copia falló lo que hace falta es justamente el botón
+    // de copiar.
+    let copiada = match captura::copiar_al_portapapeles(&final_) {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("vasak-shot: no se pudo copiar al portapapeles: {e}");
+            false
+        }
+    };
+    avisar(&final_, copiada);
     Ok(final_.to_string_lossy().into_owned())
 }
 
@@ -660,11 +666,17 @@ pub fn guardar_y_copiar_anotada(pedido: tauri::ipc::Request<'_>) -> Result<Strin
 pub fn guardar_y_copiar(region: Region) -> Result<String, String> {
     let final_ = producir(region)?;
     // Si el portapapeles falla, la captura ya está guardada: se informa el
-    // archivo igual en lugar de perder las dos cosas por una.
-    if let Err(e) = captura::copiar_al_portapapeles(&final_) {
-        eprintln!("vasak-shot: no se pudo copiar al portapapeles: {e}");
-    }
-    avisar(&final_, true);
+    // archivo igual en lugar de perder las dos cosas por una. Y el aviso se
+    // entera, porque si la copia falló lo que hace falta es justamente el botón
+    // de copiar.
+    let copiada = match captura::copiar_al_portapapeles(&final_) {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("vasak-shot: no se pudo copiar al portapapeles: {e}");
+            false
+        }
+    };
+    avisar(&final_, copiada);
     Ok(final_.to_string_lossy().into_owned())
 }
 

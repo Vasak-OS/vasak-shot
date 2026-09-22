@@ -39,6 +39,9 @@ pub const CAMPO_POR_OMISION: &str = "file";
 /// Cuánto se espera a que termine la subida, en segundos.
 const TECHO_DE_ESPERA: &str = "120";
 
+/// Cuánto se acepta de respuesta. Lo que se espera es un enlace.
+const TECHO_DE_RESPUESTA: &str = "64K";
+
 /// Una dirección a la que se puede subir, ya comprobada.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Destino {
@@ -124,12 +127,18 @@ pub fn argumentos(destino: &Destino, archivo: &Path) -> Vec<String> {
         // `scp://` y una docena más, y esto lo deja en uno solo.
         "--proto".to_string(),
         "=https".to_string(),
-        "--location".to_string(),
-        // Y una redirección tampoco puede bajar a texto plano.
-        "--proto-redir".to_string(),
-        "=https".to_string(),
+        // **Sin seguir redirecciones.** La pregunta que se contestó decía a qué
+        // servidor va, y `curl` reenvía un `POST` tal cual ante un 307 o un 308:
+        // el destino de verdad podría terminar siendo otro anfitrión, y la
+        // captura ya estaría allá cuando alguien se entere. Un servicio de
+        // subida que conteste con una redirección no se usa desde acá.
         "--max-time".to_string(),
         TECHO_DE_ESPERA.to_string(),
+        // La respuesta que se espera es un enlace. `output()` junta en memoria
+        // todo lo que llegue, así que sin techo un servidor —o algo en el medio—
+        // puede mandar un cuerpo sin fin durante los dos minutos de espera.
+        "--max-filesize".to_string(),
+        TECHO_DE_RESPUESTA.to_string(),
         "--form".to_string(),
         format!(
             "{}=@{};type=image/png",
@@ -294,8 +303,12 @@ mod pruebas {
         let juntos = args.join(" ");
 
         assert!(juntos.contains("--proto =https"), "{juntos}");
-        assert!(juntos.contains("--proto-redir =https"), "{juntos}");
         assert!(juntos.contains("--fail-with-body"), "{juntos}");
+        // Sin seguir redirecciones: la pregunta que se contestó decía a qué
+        // servidor va, y un 307 mandaría el `POST` entero a otro.
+        assert!(!juntos.contains("--location"), "{juntos}");
+        // Y con techo para la respuesta, que se junta entera en memoria.
+        assert!(juntos.contains("--max-filesize 64K"), "{juntos}");
         assert!(
             juntos.contains("file=@/tmp/x.png;type=image/png"),
             "{juntos}"
