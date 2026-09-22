@@ -20,6 +20,33 @@ export interface Ajustes {
 	carpeta: string | null;
 	/** Dónde van las capturas ahora mismo, ya resuelto. */
 	carpetaEfectiva: string;
+	/**
+	 * A dónde se suben las capturas, o nulo si no se suben a ningún lado.
+	 *
+	 * **Nulo es el valor de fábrica y no hay ninguno de reserva.** Subir es
+	 * publicar: el enlace lo abre cualquiera que lo tenga, y la captura lleva
+	 * encima lo que había en la pantalla. Sin dirección escrita a mano, el botón
+	 * de subir ni siquiera aparece.
+	 */
+	subirA: string | null;
+	/** El campo del formulario, si se eligió uno distinto del de siempre. */
+	subirCampo: string | null;
+	/** El servidor de esa dirección, que es lo que hay que preguntar antes. */
+	subirServidor: string | null;
+}
+
+/**
+ * Lo que el panel manda guardar: las preferencias enteras, no un pedazo.
+ *
+ * Enteras porque el backend escribe el archivo entero: mandar sólo lo que
+ * cambió borraría lo demás. Y como objeto y no como cuatro argumentos en fila,
+ * que es como se termina guardando la carpeta en el campo de la dirección.
+ */
+export interface Guardado {
+	alSoltar: AlSoltar;
+	carpeta: string | null;
+	subirA: string | null;
+	subirCampo: string | null;
 }
 
 /**
@@ -40,6 +67,9 @@ export const POR_OMISION: Ajustes = {
 	alSoltar: 'guardar-y-copiar',
 	carpeta: null,
 	carpetaEfectiva: '',
+	subirA: null,
+	subirCampo: null,
+	subirServidor: null,
 };
 
 /**

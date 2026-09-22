@@ -50,6 +50,16 @@ pub struct Preferencias {
     /// Nula y no la ruta ya resuelta: guardar el resultado congelaría el `$HOME`
     /// y el idioma que había el día que se guardó, y los dos cambian.
     pub carpeta: Option<PathBuf>,
+    /// A dónde se suben las capturas, si es que se suben a algún lado.
+    ///
+    /// **Sin valor por omisión, y esto es la mitad de la función.** Subir es
+    /// publicar: el enlace lo abre cualquiera que lo tenga, y una captura lleva
+    /// encima lo que había en la pantalla. Con un servicio puesto de fábrica, un
+    /// botón mal apretado publica; sin ninguno, el botón ni siquiera existe
+    /// hasta que alguien escriba adónde.
+    pub subir_a: Option<String>,
+    /// El nombre del campo del formulario, para los servicios que no usan `file`.
+    pub subir_campo: Option<String>,
 }
 
 /// El archivo donde viven, o `None` si no hay dónde.
@@ -97,6 +107,20 @@ pub fn desde_json(texto: &str, home: &str) -> Preferencias {
             .get("carpeta")
             .and_then(|v| v.as_str())
             .and_then(|s| carpeta_escrita(s, home).ok().flatten()),
+        // Por el mismo camino que comprueba el panel, y por la misma razón que
+        // la carpeta: este archivo se edita a mano, y una dirección que no sea
+        // `https` escrita ahí no puede convertirse en una subida en texto plano
+        // —o en algo que ni siquiera es una subida— sin que nadie la haya mirado.
+        subir_a: valor.get("subirA").and_then(|v| v.as_str()).and_then(|s| {
+            crate::subida::destino_de(Some(s), None)
+                .ok()
+                .flatten()
+                .map(|d| d.url)
+        }),
+        subir_campo: valor
+            .get("subirCampo")
+            .and_then(|v| v.as_str())
+            .and_then(|s| crate::subida::campo_de(Some(s)).ok()),
     }
 }
 
@@ -233,6 +257,8 @@ mod tests {
         let originales = Preferencias {
             al_soltar: AlSoltar::Copiar,
             carpeta: Some(PathBuf::from("/mnt/fotos")),
+            subir_a: Some("https://ejemplo.invalido/subir".to_string()),
+            subir_campo: Some("files[]".to_string()),
         };
         let texto = serde_json::to_string(&originales).unwrap();
         assert_eq!(desde_json(&texto, HOGAR), originales);
@@ -313,5 +339,46 @@ mod tests {
         // Y `~otro` no es el `~` de nadie: es un nombre relativo que empieza con
         // esa letra.
         assert!(carpeta_escrita("~otro/Fotos", "/home/pato").is_err());
+    }
+
+    #[test]
+    fn una_direccion_para_subir_que_no_es_https_no_se_usa() {
+        // El archivo se edita a mano, y este campo decide **a dónde se publica**
+        // una captura. Una dirección en texto plano —o algo que ni siquiera es
+        // una subida— escrita ahí no puede usarse porque estaba en el archivo.
+        for mala in [
+            r#"{"subirA":"http://ejemplo.invalido/s"}"#,
+            r#"{"subirA":"file:///etc/passwd"}"#,
+            r#"{"subirA":"ejemplo.invalido"}"#,
+        ] {
+            assert_eq!(desde_json(mala, HOGAR).subir_a, None, "con {mala}");
+        }
+        assert_eq!(
+            desde_json(r#"{"subirA":"https://ejemplo.invalido/s"}"#, HOGAR).subir_a,
+            Some("https://ejemplo.invalido/s".to_string())
+        );
+    }
+
+    #[test]
+    fn un_campo_de_formulario_raro_no_se_usa() {
+        // `curl` parte el argumento por el primer `=` y lo que sigue a un `@` es
+        // un archivo: un campo con cualquiera de los dos deja de nombrar un
+        // campo y pasa a decidir qué se manda.
+        assert_eq!(
+            desde_json(r#"{"subirCampo":"x=@/etc/passwd"}"#, HOGAR).subir_campo,
+            None
+        );
+        assert_eq!(
+            desde_json(r#"{"subirCampo":"files[]"}"#, HOGAR).subir_campo,
+            Some("files[]".to_string())
+        );
+    }
+
+    #[test]
+    fn sin_direccion_no_se_sube_a_ningun_lado() {
+        // El estado de siempre, y el que tiene que quedar si alguien borra la
+        // clave: ninguna captura sale de esta máquina por su cuenta.
+        assert_eq!(desde_json("{}", HOGAR).subir_a, None);
+        assert_eq!(Preferencias::default().subir_a, None);
     }
 }

@@ -234,8 +234,9 @@ carga se dice.
 ## Dependencias
 
 `wl-clipboard` para el portapapeles, `gtk-layer-shell` para la superficie que tapa
-todo, y `libnotify` para el aviso al guardar y para la cuenta regresiva del
-retardo.
+todo, `libnotify` para el aviso al guardar y para la cuenta regresiva del retardo,
+`xdg-utils` para abrir la captura o su carpeta desde el aviso, y `curl` para
+subirla cuando hay una dirección configurada.
 
 Para capturar no hace falta ninguna: el crate de Wayland trae su propia
 implementación del protocolo y **no** enlaza `libwayland-client` — comprobado con
@@ -284,12 +285,44 @@ La cuenta regresiva va en una notificación, que es lo único que puede aparecer
 sin robar el foco. **Se apaga un segundo antes del disparo**, porque si no
 saldría adentro de la foto.
 
-## Lo que falta
+## El aviso, y qué hacer con la captura
 
-- **Subir la captura** a algún lado y dar el enlace, para compartirla sin adjuntar
-  el archivo.
-- **El aviso de guardado no lleva a ninguna parte**: dice dónde quedó, pero no
-  abre ni la carpeta ni el archivo.
+El aviso de guardado trae tres botones: **Abrir**, **Abrir la carpeta** y
+**Copiar** —este último sólo cuando la captura no se copió ya, porque si no sería
+un botón que no hace nada—. Abrir va por `xdg-open`, así que respeta el visor y
+el gestor de archivos que la persona haya elegido.
+
+Los botones los muestra **otro proceso**. `notify-send --action` se queda
+esperando a que alguien elija, y la ventana del selector se cierra sola en cuanto
+la captura está entregada: si esperara, el gesto duraría lo que dure la
+notificación. Así que el selector deja atrás un hijo suelto —esta misma
+aplicación con `--aviso`— que se queda con la notificación y actúa cuando llega
+la respuesta.
+
+Si el demonio de notificaciones no soporta acciones, los botones no aparecen y el
+aviso queda como estaba. No hay nada que detectar: es lo que hace `notify-send`.
+
+## Subir la captura
+
+**Subir es publicar**, y por eso esto no se parece al resto de la herramienta:
+
+- **No hay servicio por omisión.** Sin una dirección escrita a mano en las
+  preferencias, el botón de subir no existe. Un servicio puesto de fábrica
+  convierte un botón mal apretado en una publicación.
+- **Pregunta antes**, y dice a qué servidor va. Cuánto tiempo queda ahí no lo
+  sabemos —lo decide ese servidor— y se dice así en lugar de prometer un plazo.
+- **Sólo `https`.** Subir por `http` es publicar en texto plano, y `curl` habla
+  una docena de protocolos más —`file://` entre ellos— que con una dirección mal
+  escrita harían cualquier otra cosa. La comprobación está en Rust, que es el que
+  ejecuta.
+- **Sin metadatos.** El PNG se reescribe antes de mandarlo, así que viajan los
+  píxeles y nada más.
+- **Sin atajo de teclado.** Guardar es Intro y copiar es Ctrl+C; publicar no
+  puede estar a una tecla de distancia.
+
+El enlace queda en el portapapeles y a la vista un momento antes de que la
+ventana se cierre. Se manda como `multipart/form-data`; el nombre del campo es
+`file` salvo que se escriba otro, porque algunos servicios piden `files[]`.
 
 ## Licencia
 

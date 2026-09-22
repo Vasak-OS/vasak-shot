@@ -10,15 +10,63 @@
  */
 import { useI18n } from '@vasakgroup/tauri-plugin-i18n';
 import { ref, watch } from 'vue';
-import { ACCIONES, type Ajustes, type AlSoltar, claveDe } from '@/tools/preferencias';
+import {
+	ACCIONES,
+	type Ajustes,
+	type AlSoltar,
+	claveDe,
+	type Guardado,
+} from '@/tools/preferencias';
 
 const { t } = useI18n();
 
 const props = defineProps<{ ajustes: Ajustes; error: string }>();
 const emitir = defineEmits<{
-	guardar: [alSoltar: AlSoltar, carpeta: string | null];
+	guardar: [cambios: Guardado];
 	cerrar: [];
 }>();
+
+/**
+ * Lo guardado, con un campo cambiado.
+ *
+ * El backend escribe el archivo entero, así que mandar sólo lo que cambió
+ * borraría lo demás: elegir una acción no puede llevarse puesta la dirección
+ * para subir.
+ */
+function conCambio(parte: Partial<Guardado>): Guardado {
+	return {
+		alSoltar: props.ajustes.alSoltar,
+		carpeta: props.ajustes.carpeta,
+		subirA: props.ajustes.subirA,
+		subirCampo: props.ajustes.subirCampo,
+		...parte,
+	};
+}
+
+/** Lo escrito en los campos de subida, que tampoco es lo guardado. */
+const urlEscrita = ref(props.ajustes.subirA ?? '');
+const campoEscrito = ref(props.ajustes.subirCampo ?? '');
+const sinAplicarSubida = ref(false);
+
+watch(
+	() => [props.ajustes.subirA, props.ajustes.subirCampo],
+	([url, campo]) => {
+		if (sinAplicarSubida.value) return;
+		urlEscrita.value = url ?? '';
+		campoEscrito.value = campo ?? '';
+	}
+);
+
+function aplicarSubida() {
+	sinAplicarSubida.value = false;
+	emitir(
+		'guardar',
+		conCambio({
+			subirA: urlEscrita.value.trim() || null,
+			subirCampo: campoEscrito.value.trim() || null,
+		})
+	);
+}
 
 /**
  * Lo que hay escrito en el campo, que no es lo guardado hasta que se aplica.
@@ -49,18 +97,18 @@ function elegir(accion: AlSoltar) {
 	// Un clic en una opción es una decisión tomada: se guarda sola. La carpeta
 	// no, porque a mitad de escribir una ruta no hay ninguna decisión todavía —
 	// por eso viaja la guardada y no la del campo.
-	emitir('guardar', accion, props.ajustes.carpeta);
+	emitir('guardar', conCambio({ alSoltar: accion }));
 }
 
 function aplicarCarpeta() {
 	sinAplicar.value = false;
-	emitir('guardar', props.ajustes.alSoltar, escrita.value);
+	emitir('guardar', conCambio({ carpeta: escrita.value }));
 }
 
 function restablecerCarpeta() {
 	sinAplicar.value = false;
 	escrita.value = '';
-	emitir('guardar', props.ajustes.alSoltar, null);
+	emitir('guardar', conCambio({ carpeta: null }));
 }
 </script>
 
@@ -143,6 +191,46 @@ function restablecerCarpeta() {
 			</p>
 
 			<p v-if="props.error" class="mt-1.5 text-status-error text-xs">{{ props.error }}</p>
+		</div>
+
+		<!-- Subir es publicar, así que este campo empieza vacío y se queda vacío
+		     hasta que alguien escriba adónde. Sin dirección no hay botón de
+		     subir en la barra. -->
+		<div class="mt-4 border-ui-border border-t pt-3">
+			<label class="mb-1.5 block text-tx-muted text-xs" for="subir-a">
+				{{ t('shot.subirA') }}
+			</label>
+			<div class="flex items-center gap-1.5">
+				<input
+					id="subir-a"
+					v-model="urlEscrita"
+					type="text"
+					spellcheck="false"
+					placeholder="https://"
+					class="min-w-0 flex-1 rounded-corner border border-ui-border bg-ui-bg px-2 py-1 font-mono text-xs"
+					@input="sinAplicarSubida = true"
+					@keydown.enter.prevent="aplicarSubida()"
+				/>
+				<input
+					id="subir-campo"
+					v-model="campoEscrito"
+					type="text"
+					spellcheck="false"
+					:placeholder="t('shot.subirCampo')"
+					:aria-label="t('shot.subirCampo')"
+					class="w-24 min-w-0 rounded-corner border border-ui-border bg-ui-bg px-2 py-1 font-mono text-xs"
+					@input="sinAplicarSubida = true"
+					@keydown.enter.prevent="aplicarSubida()"
+				/>
+				<button
+					type="button"
+					class="rounded-corner bg-primary px-3 py-1 text-sm text-tx-on-primary hover:brightness-110"
+					@click="aplicarSubida()"
+				>
+					{{ t('shot.aplicar') }}
+				</button>
+			</div>
+			<p class="mt-1.5 text-[10px] text-tx-muted">{{ t('shot.subirAviso') }}</p>
 		</div>
 	</section>
 </template>

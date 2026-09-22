@@ -58,3 +58,14 @@ shot:
   retardo: Retardo
   sinRetardo: Sin retardo
   pantalla: Pantalla
+  subir: Subir
+  subirTitulo: Subir la captura
+  subirA: Dirección para subir
+  subirCampo: campo
+  subirDestino: "Se va a subir a {0}"
+  subirAviso: Cualquiera que tenga el enlace va a poder verla, y cuánto tiempo queda ahí lo decide ese servidor.
+  subida: "Subida: {0}"
+  avisoGuardada: Captura guardada
+  avisoAbrir: Abrir
+  avisoCarpeta: Abrir la carpeta
+  avisoCopiar: Copiar

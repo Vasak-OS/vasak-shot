@@ -23,6 +23,8 @@ fn lo_guardado_se_vuelve_a_leer_del_disco() {
     let elegidas = Preferencias {
         al_soltar: AlSoltar::Esperar,
         carpeta: Some(base.join("capturas")),
+        subir_a: Some("https://ejemplo.invalido/subir".to_string()),
+        subir_campo: Some("files[]".to_string()),
     };
     preferencias::escribir(&elegidas).expect("no se pudo escribir");
 
@@ -36,9 +38,13 @@ fn lo_guardado_se_vuelve_a_leer_del_disco() {
     assert!(!ruta.with_extension("json.nuevo").exists());
 
     // Guardar otra vez pisa, no acumula.
+    // Y una dirección para subir se puede sacar: dejar de publicar tiene que ser
+    // tan fácil como empezar.
     let segundas = Preferencias {
         al_soltar: AlSoltar::Copiar,
         carpeta: None,
+        subir_a: None,
+        subir_campo: None,
     };
     preferencias::escribir(&segundas).expect("no se pudo reescribir");
     assert_eq!(preferencias::leer(), segundas);

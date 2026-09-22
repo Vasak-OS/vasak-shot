@@ -493,13 +493,63 @@ pub fn recortar_imagen(
         .map_err(|e| format!("no se pudo guardar {}: {e}", destino.display()))
 }
 
+/// Copia un texto al portapapeles.
+///
+/// Por `wl-copy` y por las mismas razones que la imagen, incluida la de mandar
+/// su salida a `null`: se demoniza para seguir sirviendo el portapapeles después
+/// de que este proceso termine, y con los descriptores heredados quien nos llamó
+/// se queda esperando un pipe que no se cierra.
+pub fn copiar_texto_al_portapapeles(texto: &str) -> Result<(), String> {
+    use std::process::{Command, Stdio};
+
+    let mut hijo = Command::new("wl-copy")
+        .args(["--type", "text/plain"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("no se pudo ejecutar wl-copy: {e}"))?;
+
+    escribirle(&mut hijo, texto.as_bytes())
+}
+
+/// Le pasa los bytes a un hijo por su entrada y lo espera, pase lo que pase.
+///
+/// **Esperarlo aunque la escritura falle**: soltar un `Child` no lo entierra, así
+/// que salir antes del `wait` deja un proceso zombi por cada intento fallido. No
+/// es un problema en un proceso que dura tres segundos, pero sí en el hijo suelto
+/// del aviso, que puede quedarse un rato largo esperando una respuesta.
+fn escribirle(hijo: &mut std::process::Child, bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+
+    // `take` y no `as_mut`: cerrar la entrada es lo que le dice a `wl-copy` que
+    // los datos terminaron. `wait` también la cierra, pero acá se cierra aunque
+    // la escritura falle y antes de esperar.
+    let escritura = match hijo.stdin.take() {
+        Some(mut entrada) => entrada
+            .write_all(bytes)
+            .map_err(|e| format!("no se pudo escribirle a wl-copy: {e}")),
+        None => Err("wl-copy no aceptó la entrada".to_string()),
+    };
+
+    let estado = hijo
+        .wait()
+        .map_err(|e| format!("wl-copy no terminó bien: {e}"));
+
+    escritura?;
+    if estado?.success() {
+        Ok(())
+    } else {
+        Err("wl-copy falló".to_string())
+    }
+}
+
 /// Copia un PNG al portapapeles.
 ///
 /// Por `wl-copy` y no por la API de Tauri: el portapapeles de Tauri maneja texto,
 /// y lo que hace útil una captura es poder pegarla como imagen en un chat o un
 /// documento. `wl-copy` es el que sabe declarar el tipo `image/png` en Wayland.
 pub fn copiar_al_portapapeles(ruta: &Path) -> Result<(), String> {
-    use std::io::Write;
     use std::process::{Command, Stdio};
 
     let bytes =
@@ -521,23 +571,7 @@ pub fn copiar_al_portapapeles(ruta: &Path) -> Result<(), String> {
         .spawn()
         .map_err(|e| format!("no se pudo ejecutar wl-copy: {e}"))?;
 
-    // El `take` es necesario: dejando la tubería abierta, `wl-copy` sigue
-    // esperando más datos y `wait` no vuelve nunca.
-    hijo.stdin
-        .take()
-        .ok_or_else(|| "wl-copy no aceptó la entrada".to_string())?
-        .write_all(&bytes)
-        .map_err(|e| format!("no se pudo escribir al portapapeles: {e}"))?;
-
-    let estado = hijo
-        .wait()
-        .map_err(|e| format!("wl-copy no terminó: {e}"))?;
-
-    if estado.success() {
-        Ok(())
-    } else {
-        Err("wl-copy falló".to_string())
-    }
+    escribirle(&mut hijo, &bytes)
 }
 
 #[cfg(test)]
