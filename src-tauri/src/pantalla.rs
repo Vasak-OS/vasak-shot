@@ -134,11 +134,27 @@ pub struct Lienzo {
 /// una pantalla sola, o en varias de la misma escala, el lienzo ya tiene los
 /// píxeles de verdad y quedarse con una segunda copia sería duplicar decenas de
 /// megabytes para nada.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Copia {
     pub salida: Monitor,
     /// Los píxeles tal como llegaron, sólo si la composición los estiró.
     pub nativos: Option<RgbaImage>,
+}
+
+/// A mano, y no derivado: el `Debug` de una imagen imprime **todos sus bytes**.
+///
+/// `Captura` lleva estas copias adentro y también deriva `Debug`, así que una
+/// aserción que falle en una prueba —o un `unwrap_err` que formatee el lado
+/// correcto— volcaría decenas de megabytes de píxeles a la salida. Lo que hace
+/// falta saber de una copia es de qué pantalla es y de qué tamaño son sus
+/// píxeles.
+impl std::fmt::Debug for Copia {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Copia")
+            .field("salida", &self.salida)
+            .field("nativos", &self.nativos.as_ref().map(RgbaImage::dimensions))
+            .finish()
+    }
 }
 
 impl Copia {
@@ -1172,5 +1188,33 @@ mod pruebas {
                 assert_eq!(p[2], 255, "columna {x} tendría que ser la azul");
             }
         }
+    }
+
+    #[test]
+    fn una_copia_no_vuelca_sus_pixeles_al_imprimirse() {
+        // El `Debug` derivado de una imagen imprime todos sus bytes, y `Captura`
+        // lleva estas copias adentro: una aserción que falle volcaría decenas de
+        // megabytes. Lo que hace falta es de qué pantalla es y de qué tamaño.
+        let copia = Copia {
+            salida: Monitor::nuevo(
+                "eDP-1",
+                Salida {
+                    x: 0,
+                    y: 0,
+                    ancho: 100,
+                    alto: 50,
+                },
+            ),
+            nativos: Some(lisa(100, 50, [7, 7, 7, 255])),
+        };
+
+        let texto = format!("{copia:?}");
+        assert!(texto.contains("eDP-1"), "{texto}");
+        assert!(texto.contains("100, 50"), "{texto}");
+        assert!(
+            texto.len() < 200,
+            "el volcado tiene {} caracteres: son los píxeles",
+            texto.len()
+        );
     }
 }
