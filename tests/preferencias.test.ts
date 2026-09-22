@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { ACCIONES, type AlSoltar, claveDe, comandoAlSoltar } from '@/tools/preferencias';
+import { ACCIONES, type AlSoltar, claveDe, comandoAlSoltar, POR_OMISION } from '@/tools/preferencias';
 
 describe('comandoAlSoltar', () => {
 	test('cada acción dispara el comando que nombra', () => {
@@ -54,3 +54,21 @@ describe('claveDe', () => {
 		expect(claves.size).toBe(ACCIONES.length);
 	});
 });
+
+describe('POR_OMISION', () => {
+	test('no se sube a ningún lado hasta que alguien escriba adónde', () => {
+		// Es la mitad de la función, y por eso está fijado de los dos lados: un
+		// servicio puesto de fábrica convierte un botón mal apretado en una
+		// publicación. Mientras esto sea nulo, el botón de subir no aparece.
+		expect(POR_OMISION.subirA).toBeNull();
+		expect(POR_OMISION.subirServidor).toBeNull();
+	});
+
+	test('mientras el backend no conteste, se guarda y se copia como siempre', () => {
+		// Una respuesta que tarda no puede cambiar lo que la herramienta hace,
+		// sólo retrasarlo.
+		expect(POR_OMISION.alSoltar).toBe('guardar-y-copiar');
+		expect(POR_OMISION.carpeta).toBeNull();
+	});
+});
+

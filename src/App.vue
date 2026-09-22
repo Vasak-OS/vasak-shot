@@ -14,6 +14,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import BarraDeAnotacion from '@/components/BarraDeAnotacion.vue';
 import BarraDeCaptura from '@/components/BarraDeCaptura.vue';
 import CapaDeAnotaciones from '@/components/CapaDeAnotaciones.vue';
+import ConfirmarSubida from '@/components/ConfirmarSubida.vue';
 import Lupa from '@/components/Lupa.vue';
 import PanelPreferencias from '@/components/PanelPreferencias.vue';
 import Tiradores from '@/components/Tiradores.vue';
@@ -31,9 +32,9 @@ import { interpolar } from '@/tools/interpolar';
 import { type Lienzo, medidaEnCss } from '@/tools/lienzo';
 import {
 	type Ajustes,
-	type AlSoltar,
 	type Comando,
 	comandoAlSoltar,
+	type Guardado,
 	POR_OMISION,
 } from '@/tools/preferencias';
 import {
@@ -159,6 +160,14 @@ const cargando = ref<Promise<void> | null>(null);
 const panel = ref(false);
 const errorPanel = ref('');
 
+/**
+ * Si se está preguntando antes de subir.
+ *
+ * La pregunta no es un adorno: subir publica, y el resto de la herramienta
+ * guarda y copia en esta máquina. Ver `ConfirmarSubida`.
+ */
+const confirmandoSubida = ref(false);
+
 /** El tamaño de esta pantalla, que es el límite de todo lo que se puede elegir. */
 const pantalla = computed(() => lienzo.value?.salida ?? { ancho: 0, alto: 0 });
 
@@ -171,6 +180,7 @@ const pantalla = computed(() => lienzo.value?.salida ?? { ancho: 0, alto: 0 });
  */
 const resaltada = computed<Ventana | null>(() => {
 	if (seleccion.value || arrastre.value || ajuste.value || panel.value) return null;
+	if (confirmandoSubida.value) return null;
 	return ventanaEn(ventanas.value, puntero.value);
 });
 
@@ -202,6 +212,7 @@ const pantallaResaltada = computed<Monitor | null>(() => {
 const conLupa = computed(
 	() =>
 		!panel.value &&
+		!confirmandoSubida.value &&
 		puntero.value !== null &&
 		(arrastre.value !== null || ajuste.value !== null || (!seleccion.value && !resaltada.value))
 );
@@ -229,6 +240,9 @@ function empezar(evento: MouseEvent) {
 	// lugar de enumerar etiquetas: el panel tiene campos y etiquetas además de
 	// botones, y una lista de etiquetas queda vieja en cuanto se agrega una.
 	if ((evento.target as HTMLElement).closest('[data-sin-arrastre]')) return;
+	// Con la pregunta de subir abierta, el lienzo no responde: lo que hay que
+	// hacer es contestarla, y un arrastre debajo cambiaría lo que se va a subir.
+	if (confirmandoSubida.value) return;
 	const punto = puntoDe(evento);
 	// Se anota también acá y no sólo al mover: el selector aparece de golpe
 	// bajo un puntero que puede estar quieto, y entonces un clic sin moverlo
@@ -422,6 +436,14 @@ function alTeclado(evento: KeyboardEvent) {
 		return;
 	}
 
+	// Y con la pregunta de subir abierta, Escape la cancela y lo demás no hace
+	// nada: que Intro llegue a la ventana sería guardar una captura mientras se
+	// está decidiendo si publicarla.
+	if (confirmandoSubida.value) {
+		if (evento.key === 'Escape') confirmandoSubida.value = false;
+		return;
+	}
+
 	// Después de la guarda del panel: ahí se está escribiendo una ruta, y
 	// `Ctrl+Z` es el deshacer del campo de texto, no el del dibujo.
 	if (evento.key.toLowerCase() === 'z' && evento.ctrlKey) {
@@ -511,6 +533,28 @@ async function cargarVentanas() {
 	}
 }
 
+/**
+ * Los textos del aviso de guardado, ya traducidos.
+ *
+ * Los manda el frontend porque el aviso lo muestra **otro proceso** —uno sin
+ * ventana, donde el plugin de idioma no existe— y el catálogo está de este
+ * lado. Que no lleguen no es un error: quedan los de reserva, en español.
+ */
+async function traducirAviso() {
+	try {
+		await invoke('traducir_aviso', {
+			textos: {
+				guardada: t('shot.avisoGuardada'),
+				abrir: t('shot.avisoAbrir'),
+				carpeta: t('shot.avisoCarpeta'),
+				copiar: t('shot.avisoCopiar'),
+			},
+		});
+	} catch (e) {
+		console.error('No se pudieron traducir los textos del aviso', e);
+	}
+}
+
 async function cargarSalidas() {
 	try {
 		salidas.value = await invoke<Salidas>('salidas');
@@ -568,14 +612,43 @@ async function cargarAjustes() {
 	}
 }
 
-async function guardarAjustes(alSoltar: AlSoltar, carpeta: string | null) {
+async function guardarAjustes(cambios: Guardado) {
 	errorPanel.value = '';
 	try {
 		// El backend devuelve cómo quedó: `~` expandido y espacios recortados no
-		// son lo que se tecleó, y el panel tiene que mostrar lo guardado.
-		ajustes.value = await invoke<Ajustes>('guardar_ajustes', { alSoltar, carpeta });
+		// son lo que se tecleó, y el panel tiene que mostrar lo guardado. La
+		// dirección para subir, además, puede no ser aceptada.
+		// Desarmado y no tal cual: `invoke` pide un objeto con índice de cadena, y
+		// una interfaz no lo tiene.
+		ajustes.value = await invoke<Ajustes>('guardar_ajustes', { ...cambios });
 	} catch (e) {
 		errorPanel.value = String(e);
+	}
+}
+
+/**
+ * Sube lo elegido, ya contestada la pregunta.
+ *
+ * El enlace queda en el portapapeles —lo hace Rust— y a la vista un rato más
+ * largo que el aviso de guardado: es lo único que queda de la captura, y
+ * cerrarse enseguida sería perderlo.
+ */
+async function subir() {
+	confirmandoSubida.value = false;
+	const r = aEntregar.value;
+	if (!r || trabajando.value) return;
+	trabajando.value = true;
+	error.value = '';
+	try {
+		const lienzoDeAnotacion = dibujo.value.items.length > 0 ? capa.value : null;
+		const enlace = lienzoDeAnotacion
+			? await invoke<string>('subir_anotada', await lienzoDeAnotacion.exportar())
+			: await invoke<string>('subir', { region: r });
+		aviso.value = interpolar(t('shot.subida'), enlace);
+		setTimeout(() => void salir(), 2500);
+	} catch (e) {
+		error.value = String(e);
+		trabajando.value = false;
 	}
 }
 
@@ -587,6 +660,7 @@ onMounted(async () => {
 	// las dos cosas.
 	void cargarVentanas();
 	void cargarSalidas();
+	void traducirAviso();
 	try {
 		const l = await invoke<Lienzo>('lienzo');
 		lienzo.value = l;
@@ -795,6 +869,14 @@ const estilo = computed(() => {
 			{{ aviso }}
 		</div>
 
+		<ConfirmarSubida
+			v-if="confirmandoSubida && ajustes.subirServidor"
+			:servidor="ajustes.subirServidor"
+			:trabajando="trabajando"
+			@subir="subir()"
+			@cancelar="confirmandoSubida = false"
+		/>
+
 		<PanelPreferencias
 			v-if="panel"
 			:ajustes="ajustes"
@@ -826,6 +908,19 @@ const estilo = computed(() => {
 			>
 				{{ t('shot.guardar') }}
 				<kbd class="font-mono text-[10px] text-tx-on-primary/70">{{ t('shot.teclaGuardar') }}</kbd>
+			</button>
+			<!-- Sólo con una dirección configurada: sin ella no hay a dónde
+			     subir, y un botón que pregunta y después falla es peor que no
+			     tenerlo. Sin atajo de teclado, tampoco: publicar no puede estar
+			     a una tecla de distancia. -->
+			<button
+				v-if="ajustes.subirServidor"
+				type="button"
+				class="rounded-corner px-3 py-1.5 text-sm text-tx-main hover:bg-ui-surface disabled:opacity-50"
+				:disabled="trabajando"
+				@click="confirmandoSubida = true"
+			>
+				{{ t('shot.subir') }}
 			</button>
 			<span class="h-5 w-px bg-ui-border"></span>
 			<button

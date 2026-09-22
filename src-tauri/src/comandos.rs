@@ -1,10 +1,12 @@
 //! Lo que el frontend puede pedir.
 
 use crate::anotada;
+use crate::aviso::{self, Textos};
 use crate::captura::{self, Monitor, Region, Salida};
 use crate::destino;
 use crate::pantalla::Copia;
 use crate::preferencias::{self as prefs, AlSoltar};
+use crate::subida::{self, Destino};
 use crate::ventanas::Ventana;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
@@ -399,10 +401,28 @@ pub struct Ajustes {
     pub carpeta: Option<String>,
     /// Dónde van las capturas ahora mismo, ya resuelto.
     pub carpeta_efectiva: String,
+    /// A dónde se suben, o nulo si no se sube a ningún lado.
+    pub subir_a: Option<String>,
+    /// El campo del formulario, si se eligió uno distinto del de siempre.
+    pub subir_campo: Option<String>,
+    /// El servidor de esa dirección, que es lo que hay que preguntar antes.
+    ///
+    /// Ya extraído de este lado y no en el frontend: el que va a ejecutar la
+    /// subida es éste, y lo que se pregunta tiene que ser lo que de verdad va a
+    /// pasar. Dos maneras de sacar el anfitrión de una dirección son dos que se
+    /// separan, y ésta se separaría justo en la pregunta.
+    pub subir_servidor: Option<String>,
 }
 
 /// Arma la respuesta del panel a partir de las preferencias dadas.
 fn ajustes_de(preferencias: prefs::Preferencias) -> Result<Ajustes, String> {
+    let subida = subida::destino_de(
+        preferencias.subir_a.as_deref(),
+        preferencias.subir_campo.as_deref(),
+    )
+    .ok()
+    .flatten();
+
     Ok(Ajustes {
         al_soltar: preferencias.al_soltar,
         carpeta: preferencias
@@ -410,6 +430,9 @@ fn ajustes_de(preferencias: prefs::Preferencias) -> Result<Ajustes, String> {
             .as_ref()
             .map(|c| c.to_string_lossy().into_owned()),
         carpeta_efectiva: destino::carpeta_sin_crear()?.to_string_lossy().into_owned(),
+        subir_a: preferencias.subir_a.clone(),
+        subir_campo: preferencias.subir_campo.clone(),
+        subir_servidor: subida.map(|d| d.servidor().to_string()),
     })
 }
 
@@ -429,7 +452,12 @@ pub fn ajustes() -> Result<Ajustes, String> {
 /// escrita tiene que fallar mientras el panel está abierto y se la puede
 /// corregir, no media hora después cuando lo que se quería era capturar algo.
 #[tauri::command]
-pub fn guardar_ajustes(al_soltar: AlSoltar, carpeta: Option<String>) -> Result<Ajustes, String> {
+pub fn guardar_ajustes(
+    al_soltar: AlSoltar,
+    carpeta: Option<String>,
+    subir_a: Option<String>,
+    subir_campo: Option<String>,
+) -> Result<Ajustes, String> {
     let home = std::env::var("HOME").map_err(|_| "no hay HOME".to_string())?;
     let carpeta = match carpeta {
         Some(bruta) => prefs::carpeta_escrita(&bruta, &home)?,
@@ -445,9 +473,70 @@ pub fn guardar_ajustes(al_soltar: AlSoltar, carpeta: Option<String>) -> Result<A
         prefs::probar_escritura(elegida)?;
     }
 
-    let preferencias = prefs::Preferencias { al_soltar, carpeta };
+    // La dirección se comprueba **antes** de guardarla: una que no sea `https`
+    // tiene que fallar con el panel abierto y a la vista, no en el momento de
+    // apretar «subir», que es cuando ya hay una captura esperando.
+    let destino = subida::destino_de(subir_a.as_deref(), subir_campo.as_deref())?;
+
+    let preferencias = prefs::Preferencias {
+        al_soltar,
+        carpeta,
+        subir_a: destino.as_ref().map(|d| d.url.clone()),
+        subir_campo: destino.map(|d| d.campo),
+    };
     prefs::escribir(&preferencias)?;
     ajustes_de(preferencias)
+}
+
+/// La dirección configurada, o un error que dice que no hay ninguna.
+///
+/// Se lee del archivo en el momento de subir y no de lo que el frontend crea
+/// tener: lo que se publica tiene que salir de lo que está guardado.
+fn destino_configurado() -> Result<Destino, String> {
+    let preferencias = prefs::leer();
+    subida::destino_de(
+        preferencias.subir_a.as_deref(),
+        preferencias.subir_campo.as_deref(),
+    )?
+    .ok_or_else(|| "no hay ninguna dirección configurada para subir".to_string())
+}
+
+/// Sube lo elegido y deja el enlace en el portapapeles.
+///
+/// El recorte va a un temporal y se borra: subir no es guardar, y quien sube no
+/// pidió además un archivo en la carpeta.
+#[tauri::command]
+pub fn subir(region: Region) -> Result<String, String> {
+    let destino = destino_configurado()?;
+    let temporal = anotada::temporal("subir")?;
+    let resultado =
+        recortar_en(&temporal, region).and_then(|()| subida::subir(&temporal, &destino));
+    let _ = std::fs::remove_file(&temporal);
+    con_enlace(resultado?)
+}
+
+/// Lo mismo, con la captura ya compuesta por el selector.
+#[tauri::command]
+pub fn subir_anotada(pedido: tauri::ipc::Request<'_>) -> Result<String, String> {
+    let bytes = bytes_de(&pedido)?;
+    let destino = destino_configurado()?;
+    let temporal = anotada::temporal("subir")?;
+    let resultado =
+        anotada::escribir(bytes, &temporal).and_then(|()| subida::subir(&temporal, &destino));
+    let _ = std::fs::remove_file(&temporal);
+    con_enlace(resultado?)
+}
+
+/// Deja el enlace en el portapapeles y lo devuelve.
+///
+/// Que el portapapeles falle no cancela la subida: la captura **ya está
+/// publicada**, y perder el enlace sería lo peor que podría pasar a esa altura.
+/// Se devuelve igual, que es lo que el selector muestra.
+fn con_enlace(enlace: String) -> Result<String, String> {
+    if let Err(e) = captura::copiar_texto_al_portapapeles(&enlace) {
+        eprintln!("vasak-shot: no se pudo copiar el enlace: {e}");
+    }
+    Ok(enlace)
 }
 
 /// Recorta a la región elegida y devuelve el archivo final.
@@ -461,7 +550,7 @@ fn producir(region: Region) -> Result<PathBuf, String> {
 #[tauri::command]
 pub fn guardar(region: Region) -> Result<String, String> {
     let final_ = producir(region)?;
-    avisar(&final_);
+    avisar(&final_, false);
     Ok(final_.to_string_lossy().into_owned())
 }
 
@@ -482,31 +571,39 @@ pub fn copiar(region: Region) -> Result<(), String> {
     resultado
 }
 
-/// Avisa que la captura quedó guardada, con la miniatura.
+/// Los textos del aviso, tal como el frontend los tradujo.
 ///
-/// Por `notify-send` y no por la API de notificaciones de Tauri: el aviso tiene
-/// que aparecer **después** de que esta ventana se cierre, y una notificación
-/// emitida por un proceso que está terminando puede irse con él. El demonio de
-/// notificaciones del escritorio la recibe y la muestra por su cuenta.
+/// Un estático y no un argumento de cada comando: son los mismos para toda la
+/// vida del proceso, y pasarlos en cada entrega sería repetir cuatro cadenas en
+/// cuatro comandos. El frontend los deja acá al abrirse; el camino de la línea
+/// de órdenes no pasa por ninguna ventana y se queda con los de reserva.
+fn textos_del_aviso() -> &'static Mutex<Textos> {
+    static TEXTOS: OnceLock<Mutex<Textos>> = OnceLock::new();
+    TEXTOS.get_or_init(|| Mutex::new(Textos::default()))
+}
+
+/// Anota los textos del aviso, ya traducidos.
+#[tauri::command]
+pub fn traducir_aviso(textos: Textos) {
+    if let Ok(mut guardia) = textos_del_aviso().lock() {
+        *guardia = textos;
+    }
+}
+
+/// Avisa que la captura quedó guardada, con la miniatura y qué hacer con ella.
+///
+/// Lo muestra **otro proceso**: los botones del aviso implican esperar a que
+/// alguien los apriete, y esta ventana se cierra sola en cuanto la captura está
+/// entregada. Ver `aviso`.
 ///
 /// Si falla, no se dice nada más: la captura ya está guardada y el aviso es un
 /// lujo, no el resultado.
-fn avisar(ruta: &std::path::Path) {
-    let _ = std::process::Command::new("notify-send")
-        .args([
-            "--app-name=vasak-shot",
-            "--icon",
-            &ruta.to_string_lossy(),
-            "Captura guardada",
-        ])
-        .arg(
-            ruta.file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default(),
-        )
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
+fn avisar(ruta: &std::path::Path, copiada: bool) {
+    let textos = textos_del_aviso()
+        .lock()
+        .map(|t| t.clone())
+        .unwrap_or_default();
+    aviso::lanzar(ruta, copiada, &textos);
 }
 
 /// Los bytes crudos de un pedido, o un error que se entienda.
@@ -528,7 +625,7 @@ pub fn guardar_anotada(pedido: tauri::ipc::Request<'_>) -> Result<String, String
     let bytes = bytes_de(&pedido)?;
     let final_ = destino::carpeta()?.join(destino::nombre_de_ahora());
     anotada::escribir(bytes, &final_)?;
-    avisar(&final_);
+    avisar(&final_, false);
     Ok(final_.to_string_lossy().into_owned())
 }
 
@@ -554,7 +651,7 @@ pub fn guardar_y_copiar_anotada(pedido: tauri::ipc::Request<'_>) -> Result<Strin
     if let Err(e) = captura::copiar_al_portapapeles(&final_) {
         eprintln!("vasak-shot: no se pudo copiar al portapapeles: {e}");
     }
-    avisar(&final_);
+    avisar(&final_, true);
     Ok(final_.to_string_lossy().into_owned())
 }
 
@@ -567,7 +664,7 @@ pub fn guardar_y_copiar(region: Region) -> Result<String, String> {
     if let Err(e) = captura::copiar_al_portapapeles(&final_) {
         eprintln!("vasak-shot: no se pudo copiar al portapapeles: {e}");
     }
-    avisar(&final_);
+    avisar(&final_, true);
     Ok(final_.to_string_lossy().into_owned())
 }
 

@@ -17,6 +17,17 @@ pub enum Modo {
     PantallaCompleta,
     /// Guardar una sola pantalla, la que se llame así, y salir.
     Salida(String),
+    /// Mostrar el aviso de una captura **ya guardada**, y esperar la respuesta.
+    ///
+    /// No captura nada: es el proceso suelto que el selector deja atrás para
+    /// que los botones del aviso tengan a alguien escuchando. Ver `aviso`.
+    Aviso {
+        ruta: std::path::PathBuf,
+        /// Si la captura ya quedó en el portapapeles, para no ofrecer copiarla.
+        copiada: bool,
+        /// Los cuatro textos, una línea cada uno, como los tradujo el frontend.
+        textos: String,
+    },
 }
 
 /// Todo lo que se puede pedir por línea de órdenes.
@@ -46,11 +57,26 @@ pub const USO: &str = "uso: vasak-shot [--pantalla] [--salida NOMBRE] [--retardo
 pub fn leer(argumentos: &[String]) -> Result<Opciones, String> {
     let mut modo = Modo::Selector;
     let mut retardo = 0;
+    let mut aviso = None;
+    let mut copiada = false;
+    let mut textos = String::new();
     let mut i = 0;
 
     while i < argumentos.len() {
         let argumento = argumentos[i].as_str();
         match bandera(argumento) {
+            Some(("--aviso", pegado)) => {
+                aviso = Some(
+                    valor(pegado, argumentos.get(i + 1), &mut i)
+                        .ok_or_else(|| "--aviso necesita la ruta de una captura".to_string())?,
+                );
+            }
+            Some(("--ya-copiada", _)) => copiada = true,
+            Some(("--textos", pegado)) => {
+                // Sin queja si falta: los textos tienen reserva, y un aviso en
+                // español es mejor que ningún aviso.
+                textos = valor(pegado, argumentos.get(i + 1), &mut i).unwrap_or_default();
+            }
             Some(("--pantalla", _)) | Some(("-p", _)) => modo = Modo::PantallaCompleta,
             Some(("--salida", pegado)) | Some(("-s", pegado)) => {
                 let nombre = valor(pegado, argumentos.get(i + 1), &mut i)
@@ -65,6 +91,20 @@ pub fn leer(argumentos: &[String]) -> Result<Opciones, String> {
             _ => {}
         }
         i += 1;
+    }
+
+    // El aviso gana sobre cualquier modo de captura: es otro programa adentro
+    // del mismo binario, y lo único que hace es mostrar una notificación de algo
+    // que ya se guardó. Capturar además sería sacar una foto que nadie pidió.
+    if let Some(ruta) = aviso {
+        return Ok(Opciones {
+            modo: Modo::Aviso {
+                ruta: std::path::PathBuf::from(ruta),
+                copiada,
+                textos,
+            },
+            retardo: 0,
+        });
     }
 
     Ok(Opciones { modo, retardo })
@@ -245,5 +285,59 @@ mod pruebas {
         let o = leer(&args(&["--retardo", "5", "--pantalla"])).expect("las dos se leen");
         assert_eq!(o.modo, Modo::PantallaCompleta);
         assert_eq!(o.retardo, 5);
+    }
+
+    #[test]
+    fn el_aviso_no_captura_nada() {
+        // Es otro programa adentro del mismo binario: muestra la notificación de
+        // algo que ya se guardó. Capturar además sería una foto que nadie pidió.
+        let o = leer(&args(&["--aviso", "/tmp/x.png"])).expect("el aviso es válido");
+        assert_eq!(
+            o.modo,
+            Modo::Aviso {
+                ruta: std::path::PathBuf::from("/tmp/x.png"),
+                copiada: false,
+                textos: String::new(),
+            }
+        );
+        assert_eq!(o.retardo, 0);
+    }
+
+    #[test]
+    fn el_aviso_gana_sobre_los_modos_de_captura() {
+        // Y también se lleva puesto el retardo: esperar cinco segundos para
+        // mostrar un aviso de algo ya guardado no tiene sentido.
+        let o = leer(&args(&[
+            "--pantalla",
+            "--retardo",
+            "5",
+            "--aviso",
+            "/tmp/x.png",
+            "--ya-copiada",
+        ]))
+        .expect("vale");
+        assert!(matches!(o.modo, Modo::Aviso { copiada: true, .. }));
+        assert_eq!(o.retardo, 0);
+    }
+
+    #[test]
+    fn un_aviso_sin_ruta_no_muestra_nada() {
+        let error = leer(&args(&["--aviso"])).expect_err("sin ruta no hay aviso");
+        assert!(error.contains("--aviso"), "{error}");
+    }
+
+    #[test]
+    fn los_textos_del_aviso_llegan_enteros() {
+        let o = leer(&args(&[
+            "--aviso",
+            "/tmp/x.png",
+            "--textos",
+            "Guardada\nAbrir\nCarpeta\nCopiar",
+        ]))
+        .expect("vale");
+        let Modo::Aviso { textos, .. } = o.modo else {
+            panic!("tendría que ser un aviso");
+        };
+        assert_eq!(textos.lines().count(), 4);
     }
 }

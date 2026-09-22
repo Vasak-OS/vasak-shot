@@ -493,6 +493,40 @@ pub fn recortar_imagen(
         .map_err(|e| format!("no se pudo guardar {}: {e}", destino.display()))
 }
 
+/// Copia un texto al portapapeles.
+///
+/// Por `wl-copy` y por las mismas razones que la imagen, incluida la de mandar
+/// su salida a `null`: se demoniza para seguir sirviendo el portapapeles después
+/// de que este proceso termine, y con los descriptores heredados quien nos llamó
+/// se queda esperando un pipe que no se cierra.
+pub fn copiar_texto_al_portapapeles(texto: &str) -> Result<(), String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let mut hijo = Command::new("wl-copy")
+        .args(["--type", "text/plain"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("no se pudo ejecutar wl-copy: {e}"))?;
+
+    hijo.stdin
+        .as_mut()
+        .ok_or_else(|| "wl-copy no aceptó la entrada".to_string())?
+        .write_all(texto.as_bytes())
+        .map_err(|e| format!("no se pudo escribirle a wl-copy: {e}"))?;
+
+    let estado = hijo
+        .wait()
+        .map_err(|e| format!("wl-copy no terminó bien: {e}"))?;
+    if estado.success() {
+        Ok(())
+    } else {
+        Err("wl-copy falló".to_string())
+    }
+}
+
 /// Copia un PNG al portapapeles.
 ///
 /// Por `wl-copy` y no por la API de Tauri: el portapapeles de Tauri maneja texto,

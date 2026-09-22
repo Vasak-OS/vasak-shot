@@ -15,6 +15,7 @@
 
 pub mod anotada;
 pub mod argumentos;
+pub mod aviso;
 pub mod captura;
 pub mod comandos;
 pub mod destino;
@@ -22,6 +23,7 @@ mod locales;
 pub mod pantalla;
 pub mod preferencias;
 pub mod retardo;
+pub mod subida;
 pub mod ventanas;
 pub mod wayfire;
 
@@ -233,6 +235,8 @@ fn region_directa(
             ancho: tomada.ancho as i32,
             alto: tomada.alto as i32,
         })),
+        // El aviso no llega hasta acá: se atiende antes de capturar.
+        Modo::Aviso { .. } => None,
         Modo::Salida(nombre) => {
             let salidas = tomada.salidas();
             let layout = captura::layout_de(&salidas);
@@ -255,6 +259,20 @@ pub fn run() {
             std::process::exit(2);
         }
     };
+
+    // El aviso de una captura ya guardada no captura nada: es el proceso suelto
+    // que el selector deja atrás para que los botones del aviso tengan a alguien
+    // escuchando. Va antes que la captura, que es justamente lo que no tiene que
+    // pasar acá.
+    if let Modo::Aviso {
+        ruta,
+        copiada,
+        textos,
+    } = &opciones.modo
+    {
+        aviso::mostrar(ruta, *copiada, &aviso::textos_de(textos));
+        return;
+    }
 
     // El retardo, **antes que todo lo demás**. Durante la espera no hay nada de
     // esta aplicación en pantalla —ni ventana ni captura tomada— que es lo que
@@ -341,6 +359,9 @@ pub fn run() {
             comandos::guardar_y_copiar_anotada,
             comandos::salidas,
             comandos::recapturar,
+            comandos::traducir_aviso,
+            comandos::subir,
+            comandos::subir_anotada,
         ])
         .setup(|app| {
             // El layer-shell tiene que correr en el hilo principal —GTK aborta
@@ -491,7 +512,13 @@ mod tests {
         }
 
         let ruta = std::env::var_os("WAYFIRE_SOCKET").expect("recién se comprobó");
-        let (x, y) = cursor_de_wayfire_en(ruta).expect("wayfire tiene que contestar la posición");
+        // Con tres intentos, y no por capricho: el tiempo de espera del socket
+        // es de un segundo —una decisión de producción, donde esperar más sería
+        // demorar la captura— y en una máquina ocupada compilando, el
+        // compositor puede tardar más que eso en contestar. Vi fallar esta
+        // prueba así, con el resto de la suite pasando.
+        let posicion = (0..3).find_map(|_| cursor_de_wayfire_en(&ruta));
+        let (x, y) = posicion.expect("wayfire tiene que contestar la posición");
         // Nada de rangos inventados: sólo que sea una coordenada de layout
         // plausible. Lo que importa es que venga del compositor.
         assert!(x > i32::MIN && y > i32::MIN, "({x}, {y})");

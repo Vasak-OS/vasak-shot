@@ -48,3 +48,14 @@ shot:
   retardo: Delay
   sinRetardo: No delay
   pantalla: Screen
+  subir: Upload
+  subirTitulo: Upload the screenshot
+  subirA: Address to upload to
+  subirCampo: field
+  subirDestino: "It will be uploaded to {0}"
+  subirAviso: Anyone with the link will be able to see it, and how long it stays there is up to that server.
+  subida: "Uploaded: {0}"
+  avisoGuardada: Screenshot saved
+  avisoAbrir: Open
+  avisoCarpeta: Open the folder
+  avisoCopiar: Copy
