@@ -3,6 +3,7 @@
 use crate::anotada;
 use crate::captura::{self, Monitor, Region, Salida};
 use crate::destino;
+use crate::pantalla::Copia;
 use crate::preferencias::{self as prefs, AlSoltar};
 use crate::ventanas::Ventana;
 use std::path::PathBuf;
@@ -209,6 +210,18 @@ pub struct Lienzo {
     /// Cuántos píxeles de la captura hay por unidad del layout, por eje.
     pub escala_x: f64,
     pub escala_y: f64,
+    /// Cuántos píxeles de verdad tiene **esta** pantalla por unidad del layout.
+    ///
+    /// Casi siempre es la misma que la del lienzo, y con una sola pantalla lo es
+    /// siempre. Se separan porque el lienzo compone a la escala **mayor** de
+    /// todas: en una pantalla de menor escala, la del lienzo dice el doble de
+    /// píxeles de los que esa pantalla tiene de verdad.
+    ///
+    /// La usa el lienzo de anotación para armarse del tamaño que va a tener el
+    /// archivo. Sin esto, anotar una captura en la pantalla de menor escala
+    /// devolvía una imagen del doble de tamaño que la misma captura sin anotar.
+    pub escala_propia_x: f64,
+    pub escala_propia_y: f64,
 }
 
 #[tauri::command]
@@ -221,6 +234,20 @@ pub fn lienzo() -> Result<Lienzo, String> {
         .ok_or_else(|| "todavía no hay ninguna captura".to_string())?;
     let (salida, escala) = salida_y_escala(c.ancho, c.alto);
 
+    // La de esta pantalla, si es una de las que el lienzo estiró. Si no, la del
+    // lienzo ya es la suya.
+    let propia = geometria()
+        .lock()
+        .ok()
+        .and_then(|g| *g)
+        .and_then(|g| {
+            c.copias
+                .iter()
+                .find(|copia| copia.salida.area() == g.salida)
+                .and_then(|copia| copia.escala())
+        })
+        .unwrap_or(escala);
+
     Ok(Lienzo {
         ruta: c.ruta.to_string_lossy().into_owned(),
         ancho: c.ancho,
@@ -228,6 +255,8 @@ pub fn lienzo() -> Result<Lienzo, String> {
         salida,
         escala_x: escala.0,
         escala_y: escala.1,
+        escala_propia_x: propia.0,
+        escala_propia_y: propia.1,
     })
 }
 
@@ -249,23 +278,111 @@ fn salida_y_escala(ancho: u32, alto: u32) -> (Salida, (f64, f64)) {
     }
 }
 
-/// Lleva la selección de la ventana a píxeles de la captura.
+/// De dónde salen los píxeles de lo elegido, y qué rectángulo hay que sacar.
+///
+/// Dos fuentes y no una porque el lienzo compone **todo a la escala mayor**: una
+/// pantalla de menor escala entra estirada, y recortar de ahí devuelve una
+/// imagen más grande que la que se eligió y borrosa, porque sus píxeles son una
+/// interpolación y no los que el compositor entregó. Cuando lo elegido cabe
+/// entero en una pantalla de ésas, se recorta de los suyos.
+#[derive(Debug, PartialEq, Eq)]
+enum Fuente {
+    /// De los píxeles sin estirar de esa pantalla, en su propia escala.
+    Nativa { indice: usize, region: Region },
+    /// De la imagen compuesta, que es de donde salió siempre.
+    Compuesta { region: Region },
+}
+
+/// Si el rectángulo de afuera contiene entero al de adentro.
+fn contiene(afuera: Salida, adentro: Region) -> bool {
+    adentro.x >= afuera.x
+        && adentro.y >= afuera.y
+        && adentro.x + adentro.ancho <= afuera.x + afuera.ancho
+        && adentro.y + adentro.alto <= afuera.y + afuera.alto
+}
+
+/// Elige la fuente y traduce la región, dado todo lo que hace falta.
+///
+/// Separada de los candados y de los estáticos para poder probarla: es la cuenta
+/// que decide qué píxeles se guardan, y equivocarla no falla — entrega una
+/// imagen que parece la pedida.
+fn fuente_de(elegida: Region, geo: Geometria, escala: (f64, f64), copias: &[Copia]) -> Fuente {
+    let n = elegida.normalizada();
+    // La selección llega en coordenadas del selector; las pantallas están en las
+    // del layout. Se suman los orígenes para poder compararlas.
+    let absoluta = Region {
+        x: geo.salida.x + n.x,
+        y: geo.salida.y + n.y,
+        ..n
+    };
+
+    for (indice, copia) in copias.iter().enumerate() {
+        let Some(propia) = copia.escala() else {
+            // Esta pantalla no se estiró: sus píxeles de verdad ya están en el
+            // lienzo, así que no hay ninguna ventaja en tratarla aparte.
+            continue;
+        };
+        if !contiene(copia.salida.area(), absoluta) {
+            continue;
+        }
+
+        // Relativa a **su** esquina, y en su escala: el rectángulo que se pide
+        // es el de sus píxeles, no el del lienzo.
+        let en_la_pantalla = Region {
+            x: absoluta.x - copia.salida.x,
+            y: absoluta.y - copia.salida.y,
+            ..absoluta
+        };
+        return Fuente::Nativa {
+            indice,
+            region: en_la_pantalla.en_la_captura(
+                Salida::entera(copia.salida.ancho, copia.salida.alto),
+                propia,
+            ),
+        };
+    }
+
+    Fuente::Compuesta {
+        region: elegida.en_la_captura(geo.salida.relativa_a(geo.layout), escala),
+    }
+}
+
+/// Recorta lo elegido y lo deja en `destino`.
 ///
 /// Todos los comandos pasan por acá: `guardar`, `copiar` y `guardar_y_copiar`. Que
 /// sea uno solo es a propósito — cuando la traducción faltaba, faltaba en los tres
 /// y había que arreglarla tres veces.
-fn traducir(region: Region) -> Result<Region, String> {
-    let (ancho, alto) = {
-        let guardia = pendiente()
-            .lock()
-            .map_err(|_| "el estado de la captura quedó envenenado".to_string())?;
-        let c = guardia
-            .as_ref()
-            .ok_or_else(|| "todavía no hay ninguna captura".to_string())?;
-        (c.ancho, c.alto)
+fn recortar_en(destino: &std::path::Path, elegida: Region) -> Result<(), String> {
+    let guardia = pendiente()
+        .lock()
+        .map_err(|_| "el estado de la captura quedó envenenado".to_string())?;
+    let c = guardia
+        .as_ref()
+        .ok_or_else(|| "todavía no hay ninguna captura".to_string())?;
+
+    let anotada = geometria().lock().ok().and_then(|g| *g);
+    let (_, escala) = salida_y_escala(c.ancho, c.alto);
+
+    let fuente = match anotada {
+        Some(geo) => fuente_de(elegida, geo, escala, &c.copias),
+        // Sin geometría no se sabe en qué pantalla está el selector, así que
+        // tampoco cuál de las copias le corresponde: queda el lienzo, que es lo
+        // que había antes de que las copias existieran.
+        None => Fuente::Compuesta {
+            region: elegida.en_la_captura(Salida::entera(c.ancho as i32, c.alto as i32), escala),
+        },
     };
-    let (salida, escala) = salida_y_escala(ancho, alto);
-    Ok(region.en_la_captura(salida, escala))
+
+    match fuente {
+        Fuente::Nativa { indice, region } => {
+            let nativos = c.copias[indice]
+                .nativos
+                .as_ref()
+                .ok_or_else(|| "esa pantalla no guardó sus píxeles".to_string())?;
+            captura::recortar_imagen(nativos, region, destino)
+        }
+        Fuente::Compuesta { region } => captura::recortar(&c.ruta, region, destino),
+    }
 }
 
 /// Las preferencias, más la carpeta que de verdad se está usando.
@@ -335,20 +452,8 @@ pub fn guardar_ajustes(al_soltar: AlSoltar, carpeta: Option<String>) -> Result<A
 
 /// Recorta a la región elegida y devuelve el archivo final.
 fn producir(region: Region) -> Result<PathBuf, String> {
-    let region = traducir(region)?;
-    let origen = {
-        let guardia = pendiente()
-            .lock()
-            .map_err(|_| "el estado de la captura quedó envenenado".to_string())?;
-        guardia
-            .as_ref()
-            .ok_or_else(|| "todavía no hay ninguna captura".to_string())?
-            .ruta
-            .clone()
-    };
-
     let final_ = destino::carpeta()?.join(destino::nombre_de_ahora());
-    captura::recortar(&origen, region, &final_)?;
+    recortar_en(&final_, region)?;
     Ok(final_)
 }
 
@@ -366,24 +471,12 @@ pub fn guardar(region: Region) -> Result<String, String> {
 /// que después hay que borrar a mano.
 #[tauri::command]
 pub fn copiar(region: Region) -> Result<(), String> {
-    let region = traducir(region)?;
-    let origen = {
-        let guardia = pendiente()
-            .lock()
-            .map_err(|_| "el estado de la captura quedó envenenado".to_string())?;
-        guardia
-            .as_ref()
-            .ok_or_else(|| "todavía no hay ninguna captura".to_string())?
-            .ruta
-            .clone()
-    };
-
     // Creado en exclusiva y en `0o600`: `/tmp` lo comparte toda la máquina, y
     // una captura que se pidió **sólo copiar** no puede quedar un rato legible
-    // por otra cuenta. `recortar` escribe sobre el archivo que ya existe y no le
+    // por otra cuenta. El recorte escribe sobre el archivo que ya existe y no le
     // cambia los permisos.
     let temporal = anotada::temporal("copia")?;
-    captura::recortar(&origen, region, &temporal)?;
+    recortar_en(&temporal, region)?;
     let resultado = captura::copiar_al_portapapeles(&temporal);
     let _ = std::fs::remove_file(&temporal);
     resultado
@@ -584,5 +677,225 @@ mod pruebas {
         // todavía en pantalla: la foto saldría de la propia herramienta.
         assert!(recapturar(0).is_err());
         assert!(recapturar(crate::retardo::TECHO + 1).is_err());
+    }
+
+    /// Un monitor al 100 % y otro al 200 %, apilados, como un portátil HiDPI
+    /// con una pantalla externa. El lienzo compone a la mayor, así que la
+    /// externa entra estirada al doble.
+    fn escalas_distintas() -> Vec<Copia> {
+        vec![
+            Copia {
+                salida: Monitor::nuevo(
+                    "HDMI-A-1",
+                    Salida {
+                        x: 0,
+                        y: 0,
+                        ancho: 1920,
+                        alto: 1080,
+                    },
+                ),
+                // 1920x1080 de verdad: el lienzo la estiró a 3840x2160.
+                nativos: Some(image::RgbaImage::new(1920, 1080)),
+            },
+            Copia {
+                salida: Monitor::nuevo(
+                    "eDP-1",
+                    Salida {
+                        x: 0,
+                        y: 1080,
+                        ancho: 1920,
+                        alto: 1080,
+                    },
+                ),
+                // La que manda la escala: sus píxeles ya son los del lienzo.
+                nativos: None,
+            },
+        ]
+    }
+
+    /// El encuadre de esa sesión: layout de 1920x2160 desde el origen.
+    fn geometria_en(salida: Salida) -> Geometria {
+        Geometria {
+            salida,
+            layout: Salida {
+                x: 0,
+                y: 0,
+                ancho: 1920,
+                alto: 2160,
+            },
+        }
+    }
+
+    #[test]
+    fn en_la_pantalla_estirada_se_recorta_de_sus_pixeles() {
+        // Es el arreglo: elegir 400x300 en la pantalla al 100 % tiene que dar un
+        // archivo de 400x300 con los píxeles que el compositor entregó, y no uno
+        // de 800x600 interpolado del lienzo — que es lo que salía, con las
+        // medidas que el selector mostró diciendo otra cosa.
+        let copias = escalas_distintas();
+        let geo = geometria_en(copias[0].salida.area());
+
+        let fuente = fuente_de(
+            Region {
+                x: 100,
+                y: 50,
+                ancho: 400,
+                alto: 300,
+            },
+            geo,
+            (2.0, 2.0),
+            &copias,
+        );
+
+        assert_eq!(
+            fuente,
+            Fuente::Nativa {
+                indice: 0,
+                region: Region {
+                    x: 100,
+                    y: 50,
+                    ancho: 400,
+                    alto: 300
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn en_la_pantalla_que_manda_la_escala_sale_del_lienzo() {
+        // Ahí los píxeles del lienzo **son** los suyos, así que no hay nada que
+        // guardar aparte ni ningún camino distinto que tomar.
+        let copias = escalas_distintas();
+        let geo = geometria_en(copias[1].salida.area());
+
+        let fuente = fuente_de(
+            Region {
+                x: 100,
+                y: 50,
+                ancho: 400,
+                alto: 300,
+            },
+            geo,
+            (2.0, 2.0),
+            &copias,
+        );
+
+        assert_eq!(
+            fuente,
+            Fuente::Compuesta {
+                // La salida empieza en y=1080 del layout, o sea en 2160 de la
+                // imagen; la selección cae 100 más abajo, ya en píxeles.
+                region: Region {
+                    x: 200,
+                    y: 2260,
+                    ancho: 800,
+                    alto: 600
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn lo_que_no_cabe_en_una_sola_pantalla_sale_del_lienzo() {
+        // `--pantalla` pide la composición entera, y una región que se pasa del
+        // borde no está entera en ninguna. El lienzo es el único lugar donde
+        // están todas.
+        let copias = escalas_distintas();
+        let geo = geometria_en(copias[0].salida.area());
+
+        let fuente = fuente_de(
+            Region {
+                x: 0,
+                y: 0,
+                ancho: 1920,
+                alto: 2160,
+            },
+            geo,
+            (2.0, 2.0),
+            &copias,
+        );
+
+        assert!(matches!(fuente, Fuente::Compuesta { .. }), "{fuente:?}");
+    }
+
+    #[test]
+    fn con_una_sola_pantalla_todo_sigue_saliendo_del_lienzo() {
+        // El caso de todos los días: nada de esto se activa, y el recorte es el
+        // mismo que antes de que las copias existieran.
+        let copias = vec![Copia {
+            salida: Monitor::nuevo(
+                "eDP-1",
+                Salida {
+                    x: 0,
+                    y: 0,
+                    ancho: 1920,
+                    alto: 1080,
+                },
+            ),
+            nativos: None,
+        }];
+        let geo = Geometria {
+            salida: copias[0].salida.area(),
+            layout: copias[0].salida.area(),
+        };
+
+        let fuente = fuente_de(
+            Region {
+                x: 10,
+                y: 20,
+                ancho: 30,
+                alto: 40,
+            },
+            geo,
+            (1.0, 1.0),
+            &copias,
+        );
+
+        assert_eq!(
+            fuente,
+            Fuente::Compuesta {
+                region: Region {
+                    x: 10,
+                    y: 20,
+                    ancho: 30,
+                    alto: 40
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn una_seleccion_al_reves_se_endereza_antes_de_elegir_la_fuente() {
+        // Arrastrar hacia arriba y a la izquierda da medidas negativas. Sin
+        // normalizar primero, la comprobación de «cabe en esta pantalla» falla
+        // y el recorte se iría al lienzo — o sea al camino borroso, y justo en
+        // la pantalla donde se nota.
+        let copias = escalas_distintas();
+        let geo = geometria_en(copias[0].salida.area());
+
+        let fuente = fuente_de(
+            Region {
+                x: 500,
+                y: 350,
+                ancho: -400,
+                alto: -300,
+            },
+            geo,
+            (2.0, 2.0),
+            &copias,
+        );
+
+        assert_eq!(
+            fuente,
+            Fuente::Nativa {
+                indice: 0,
+                region: Region {
+                    x: 100,
+                    y: 50,
+                    ancho: 400,
+                    alto: 300
+                }
+            }
+        );
     }
 }

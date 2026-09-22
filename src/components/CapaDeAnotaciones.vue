@@ -27,11 +27,18 @@ const props = defineProps<{
 const canvas = ref<HTMLCanvasElement | null>(null);
 const imagen = ref<HTMLImageElement | null>(null);
 
-/** El tamaño del canvas: la región, en píxeles de la captura. */
+/**
+ * El tamaño del canvas: la región, en píxeles **de esta pantalla**.
+ *
+ * Los de verdad, no los de la captura compuesta. Las dos escalas coinciden salvo
+ * cuando hay otro monitor de más escala, y ahí la de la captura diría el doble:
+ * el archivo saldría al doble de tamaño e interpolado, distinto del que entrega
+ * la misma captura sin anotar.
+ */
 function medida() {
 	return {
-		ancho: Math.max(1, Math.round(props.region.ancho * props.lienzo.escalaX)),
-		alto: Math.max(1, Math.round(props.region.alto * props.lienzo.escalaY)),
+		ancho: Math.max(1, Math.round(props.region.ancho * props.lienzo.escalaPropiaX)),
+		alto: Math.max(1, Math.round(props.region.alto * props.lienzo.escalaPropiaY)),
 	};
 }
 
@@ -51,22 +58,28 @@ function componer() {
 
 	// El pedazo de la captura que corresponde a esta región. La imagen tiene
 	// todas las pantallas, así que el origen de esta salida va sumado.
+	//
+	// El rectángulo de origen va en píxeles **de la captura** y el de destino en
+	// los de esta pantalla: `drawImage` se encarga de la diferencia. Son el mismo
+	// número salvo que otro monitor tenga más escala, y ahí lo que corresponde es
+	// justamente achicar lo que la composición había estirado.
 	ctx.drawImage(
 		img,
 		(props.lienzo.salida.x + props.region.x) * props.lienzo.escalaX,
 		(props.lienzo.salida.y + props.region.y) * props.lienzo.escalaY,
-		ancho,
-		alto,
+		Math.max(1, Math.round(props.region.ancho * props.lienzo.escalaX)),
+		Math.max(1, Math.round(props.region.alto * props.lienzo.escalaY)),
 		0,
 		0,
 		ancho,
 		alto
 	);
 
+	// Lo dibujado va en píxeles del canvas, o sea en los de esta pantalla.
 	const encuadre = {
 		origen: { x: props.region.x, y: props.region.y },
-		escalaX: props.lienzo.escalaX,
-		escalaY: props.lienzo.escalaY,
+		escalaX: props.lienzo.escalaPropiaX,
+		escalaY: props.lienzo.escalaPropiaY,
 	};
 	const todas = props.enCurso ? [...props.anotaciones, props.enCurso] : props.anotaciones;
 	pintar(ctx, todas, encuadre);

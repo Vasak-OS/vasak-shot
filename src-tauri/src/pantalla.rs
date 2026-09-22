@@ -114,12 +114,67 @@ struct Estado {
 /// El lienzo compuesto: lo que se guarda como PNG, y qué hay adentro.
 pub struct Lienzo {
     pub imagen: RgbaImage,
-    /// Las salidas que entraron, con su nombre y su lugar en el layout.
+    /// Las salidas que entraron, con sus píxeles de verdad si hizo falta.
     ///
     /// Sólo las que se pudieron copiar: una que el compositor no quiso copiar
     /// no está en la imagen, y ofrecerla para `--salida` sería ofrecer un
     /// recorte de píxeles negros.
-    pub salidas: Vec<Monitor>,
+    pub copias: Vec<Copia>,
+}
+
+/// Una salida copiada, y sus píxeles sin estirar cuando no son los del lienzo.
+///
+/// El lienzo se compone en la escala **mayor** de todas las pantallas, así que
+/// una de menor escala entra estirada. Recortar de ahí devuelve una imagen del
+/// doble de tamaño y borrosa: los píxeles que se guardan no son los que el
+/// compositor entregó sino una interpolación de ellos, y el archivo no coincide
+/// con las medidas que el selector mostró.
+///
+/// Por eso se guardan aparte los de las que **se estiraron**, y sólo ésos: en
+/// una pantalla sola, o en varias de la misma escala, el lienzo ya tiene los
+/// píxeles de verdad y quedarse con una segunda copia sería duplicar decenas de
+/// megabytes para nada.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Copia {
+    pub salida: Monitor,
+    /// Los píxeles tal como llegaron, sólo si la composición los estiró.
+    pub nativos: Option<RgbaImage>,
+}
+
+/// A mano, y no derivado: el `Debug` de una imagen imprime **todos sus bytes**.
+///
+/// `Captura` lleva estas copias adentro y también deriva `Debug`, así que una
+/// aserción que falle en una prueba —o un `unwrap_err` que formatee el lado
+/// correcto— volcaría decenas de megabytes de píxeles a la salida. Lo que hace
+/// falta saber de una copia es de qué pantalla es y de qué tamaño son sus
+/// píxeles.
+impl std::fmt::Debug for Copia {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Copia")
+            .field("salida", &self.salida)
+            .field("nativos", &self.nativos.as_ref().map(RgbaImage::dimensions))
+            .finish()
+    }
+}
+
+impl Copia {
+    /// Cuántos píxeles de verdad tiene esta pantalla por unidad del layout.
+    ///
+    /// La suya, no la del lienzo. En una pantalla que no se estiró son la
+    /// misma; en una de menor escala, no — y ésa es toda la diferencia entre
+    /// guardar los píxeles que el compositor entregó o una interpolación de
+    /// ellos al doble de tamaño.
+    ///
+    /// `None` cuando no hay píxeles guardados, que quiere decir «los del lienzo
+    /// son los suyos». Un cero de relleno sería una escala válida a la vista y
+    /// una división por cero un rato después.
+    pub fn escala(&self) -> Option<(f64, f64)> {
+        let px = self.nativos.as_ref()?;
+        Some((
+            f64::from(px.width()) / f64::from(self.salida.ancho.max(1)),
+            f64::from(px.height()) / f64::from(self.salida.alto.max(1)),
+        ))
+    }
 }
 
 /// Pide una copia de cada pantalla y las pega donde el layout las tiene.
@@ -197,7 +252,7 @@ pub fn capturar_pantallas() -> Result<Lienzo, String> {
             .map_err(|e| format!("se cortó la conversación con el compositor: {e}"))?;
     }
 
-    componer(&estado.pantallas)
+    componer(estado.pantallas)
 }
 
 /// Todas las pantallas contestaron: geometría y píxeles, o fallo.
@@ -237,15 +292,26 @@ impl Estado {
 
 /// Lo que hace falta de una pantalla para pegarla: cómo se llama, dónde va y
 /// qué píxeles tiene.
-type Puesta<'a> = (Option<&'a str>, (i32, i32, i32, i32), &'a RgbaImage);
+type Puesta = (Option<String>, (i32, i32, i32, i32), RgbaImage);
 
 /// Pega cada pantalla en su lugar del layout.
-fn componer(pantallas: &HashMap<u32, Pantalla>) -> Result<Lienzo, String> {
-    let mut utiles: Vec<Puesta<'_>> = pantallas
+///
+/// Toma el mapa **por valor** para poder quedarse con los píxeles en lugar de
+/// copiarlos: son decenas de megabytes y el que llama no los usa después.
+fn componer(pantallas: HashMap<u32, Pantalla>) -> Result<Lienzo, String> {
+    // Los motivos de las que fallaron, antes de consumir el mapa. Sin esto el
+    // error sería «ninguna pantalla se pudo copiar» a secas, que no deja
+    // arreglar nada.
+    let motivos: Vec<String> = pantallas
         .values()
-        .filter_map(|p| match (p.posicion, p.tamanio, &p.pixeles) {
+        .filter_map(|p| p.motivo.clone())
+        .collect();
+
+    let mut utiles: Vec<Puesta> = pantallas
+        .into_values()
+        .filter_map(|p| match (p.posicion, p.tamanio, p.pixeles) {
             (Some((x, y)), Some((ancho, alto)), Some(pixeles)) if !p.fallada => {
-                Some((p.nombre.as_deref(), (x, y, ancho, alto), pixeles))
+                Some((p.nombre, (x, y, ancho, alto), pixeles))
             }
             _ => None,
         })
@@ -258,13 +324,6 @@ fn componer(pantallas: &HashMap<u32, Pantalla>) -> Result<Lienzo, String> {
     utiles.sort_by_key(|(_, l, _)| (l.1, l.0));
 
     if utiles.is_empty() {
-        // Los motivos de las que fallaron, que es lo único que se sabe de por
-        // qué no hay captura. Sin esto el error sería «ninguna pantalla se pudo
-        // copiar» a secas, que no deja arreglar nada.
-        let motivos: Vec<&str> = pantallas
-            .values()
-            .filter_map(|p| p.motivo.as_deref())
-            .collect();
         return Err(if motivos.is_empty() {
             "ninguna pantalla se pudo copiar".to_string()
         } else {
@@ -285,54 +344,69 @@ fn componer(pantallas: &HashMap<u32, Pantalla>) -> Result<Lienzo, String> {
         .map(|(_, l, img)| f64::from(img.width()) / f64::from(l.2.max(1)))
         .fold(1.0_f64, f64::max);
 
-    let ancho = ((f64::from(x1 - x0) * escala).round() as u32).max(1);
-    let alto = ((f64::from(y1 - y0) * escala).round() as u32).max(1);
+    // **Los bordes, no los tamaños.** Cada borde del layout se lleva a píxeles
+    // por su cuenta y el tamaño sale de restar los dos ya redondeados. Con
+    // escala fraccionaria, redondear el ancho aparte deja a dos pantallas
+    // vecinas con un píxel de más o de menos entre ellas: una costura
+    // transparente o una superposición, según para qué lado cayó el redondeo.
+    // Es la misma regla que `Region::en_la_captura`, y por la misma razón.
+    let borde = |valor: i32, origen: i32| (f64::from(valor - origen) * escala).round() as i64;
+
+    let ancho = (borde(x1, x0).max(1)) as u32;
+    let alto = (borde(y1, y0).max(1)) as u32;
     let mut lienzo = RgbaImage::new(ancho, alto);
 
-    // Los nombres, antes de consumir la lista al pegar. Los que el compositor
-    // no dio se completan por posición: `pantalla-1` es la de más arriba a la
-    // izquierda. No sirve para reconocer el monitor, pero sí para nombrarlo.
-    let salidas: Vec<Monitor> = utiles
-        .iter()
-        .enumerate()
-        .map(|(i, (nombre, l, _))| {
-            Monitor::nuevo(
-                nombre.map_or_else(|| format!("pantalla-{}", i + 1), str::to_string),
-                Salida {
-                    x: l.0,
-                    y: l.1,
-                    ancho: l.2,
-                    alto: l.3,
-                },
-            )
-        })
-        .collect();
+    let mut copias = Vec::with_capacity(utiles.len());
+    for (i, (nombre, logica, pixeles)) in utiles.into_iter().enumerate() {
+        let destino_x = borde(logica.0, x0).max(0);
+        let destino_y = borde(logica.1, y0).max(0);
+        let ancho_destino = (borde(logica.0 + logica.2, x0) - destino_x).max(1) as u32;
+        let alto_destino = (borde(logica.1 + logica.3, y0) - destino_y).max(1) as u32;
 
-    for (_, logica, pixeles) in utiles {
-        let destino_x = ((f64::from(logica.0 - x0) * escala).round() as i64).max(0);
-        let destino_y = ((f64::from(logica.1 - y0) * escala).round() as i64).max(0);
-        let ancho_destino = ((f64::from(logica.2) * escala).round() as u32).max(1);
-        let alto_destino = ((f64::from(logica.3) * escala).round() as u32).max(1);
+        // Los nombres que el compositor no dio se completan por posición:
+        // `pantalla-1` es la de más arriba a la izquierda. No sirve para
+        // reconocer el monitor, pero sí para poder nombrarlo en `--salida`.
+        let salida = Monitor::nuevo(
+            nombre.unwrap_or_else(|| format!("pantalla-{}", i + 1)),
+            Salida {
+                x: logica.0,
+                y: logica.1,
+                ancho: logica.2,
+                alto: logica.3,
+            },
+        );
 
         if pixeles.width() == ancho_destino && pixeles.height() == alto_destino {
-            image::imageops::overlay(&mut lienzo, pixeles, destino_x, destino_y);
+            image::imageops::overlay(&mut lienzo, &pixeles, destino_x, destino_y);
+            // El lienzo ya tiene sus píxeles de verdad: guardarlos otra vez
+            // serían decenas de megabytes duplicados. Es el caso normal.
+            copias.push(Copia {
+                salida,
+                nativos: None,
+            });
         } else {
             // Pantallas con escalas distintas: la de menor escala se estira para
             // ocupar lo que le toca del lienzo. `Triangle` y no `Nearest` porque
             // el resultado se mira, no se mide.
             let estirada = image::imageops::resize(
-                pixeles,
+                &pixeles,
                 ancho_destino,
                 alto_destino,
                 image::imageops::FilterType::Triangle,
             );
             image::imageops::overlay(&mut lienzo, &estirada, destino_x, destino_y);
+            // Y los de verdad se guardan: recortar de lo estirado devuelve una
+            // imagen más grande y borrosa que la que se eligió.
+            copias.push(Copia {
+                salida,
+                nativos: Some(pixeles),
+            });
         }
     }
 
     Ok(Lienzo {
         imagen: lienzo,
-        salidas,
+        copias,
     })
 }
 
@@ -780,7 +854,7 @@ mod pruebas {
         );
         // Y la que sí salió sigue entera, que es el punto.
         assert_eq!(
-            componer(&pantallas).ok().map(|l| l.imagen.dimensions()),
+            componer(pantallas).ok().map(|l| l.imagen.dimensions()),
             Some((10, 10)),
             "la que sí salió sigue entera"
         );
@@ -801,7 +875,7 @@ mod pruebas {
 
         // Sin `unwrap_err`: pediría `Debug` sobre el lienzo, y derivarlo
         // volcaría la imagen entera en el mensaje de una prueba que falle.
-        let Err(error) = componer(&pantallas) else {
+        let Err(error) = componer(pantallas) else {
             panic!("con todas las pantallas perdidas no puede haber captura");
         };
 
@@ -844,7 +918,7 @@ mod pruebas {
             pantalla((0, 1080, 1920, 1080), lisa(1920, 1080, [1, 2, 3, 255])),
         );
 
-        let lienzo = componer(&pantallas).unwrap();
+        let lienzo = componer(pantallas).unwrap();
 
         // 1920x1080 y no 1920x2160: el lienzo abarca lo que ocupan las
         // pantallas, que acá no empieza en el origen. Es lo que hace `grim`, y
@@ -868,7 +942,7 @@ mod pruebas {
             pantalla((0, 50, 100, 50), lisa(100, 50, [0, 0, 255, 255])),
         );
 
-        let lienzo = componer(&pantallas).unwrap();
+        let lienzo = componer(pantallas).unwrap();
 
         assert_eq!((lienzo.imagen.width(), lienzo.imagen.height()), (100, 100));
         assert_eq!(lienzo.imagen.get_pixel(0, 0)[0], 255, "arriba la roja");
@@ -889,7 +963,7 @@ mod pruebas {
             pantalla((100, 0, 100, 50), lisa(200, 100, [0, 0, 255, 255])),
         );
 
-        let lienzo = componer(&pantallas).unwrap();
+        let lienzo = componer(pantallas).unwrap();
 
         assert_eq!((lienzo.imagen.width(), lienzo.imagen.height()), (400, 100));
         // La de escala 1 se estira para ocupar su mitad del lienzo.
@@ -917,7 +991,7 @@ mod pruebas {
             },
         );
 
-        let lienzo = componer(&pantallas).unwrap();
+        let lienzo = componer(pantallas).unwrap();
 
         assert_eq!((lienzo.imagen.width(), lienzo.imagen.height()), (100, 50));
     }
@@ -925,7 +999,7 @@ mod pruebas {
     #[test]
     fn sin_ninguna_pantalla_copiada_se_dice() {
         let pantallas = HashMap::new();
-        assert!(componer(&pantallas).is_err());
+        assert!(componer(pantallas).is_err());
     }
 
     #[test]
@@ -946,15 +1020,19 @@ mod pruebas {
             pantalla_llamada("eDP-1", (0, 0, 100, 50), lisa(100, 50, [255, 0, 0, 255])),
         );
 
-        let lienzo = componer(&pantallas).unwrap();
+        let lienzo = componer(pantallas).unwrap();
 
         // Ordenadas de arriba abajo, no en el orden de un `HashMap`: la lista
         // se muestra en el selector, y una que cambia de orden en cada
         // ejecución obliga a leerla entera cada vez.
-        let nombres: Vec<&str> = lienzo.salidas.iter().map(|s| s.nombre.as_str()).collect();
+        let nombres: Vec<&str> = lienzo
+            .copias
+            .iter()
+            .map(|c| c.salida.nombre.as_str())
+            .collect();
         assert_eq!(nombres, vec!["eDP-1", "HDMI-A-1"]);
         assert_eq!(
-            lienzo.salidas[1].area(),
+            lienzo.copias[1].salida.area(),
             crate::captura::Salida {
                 x: 0,
                 y: 50,
@@ -972,8 +1050,8 @@ mod pruebas {
         let mut pantallas = HashMap::new();
         pantallas.insert(1, pantalla((0, 0, 100, 50), lisa(100, 50, [1, 2, 3, 255])));
 
-        let lienzo = componer(&pantallas).unwrap();
-        assert_eq!(lienzo.salidas[0].nombre, "pantalla-1");
+        let lienzo = componer(pantallas).unwrap();
+        assert_eq!(lienzo.copias[0].salida.nombre, "pantalla-1");
     }
 
     #[test]
@@ -997,8 +1075,146 @@ mod pruebas {
             },
         );
 
-        let lienzo = componer(&pantallas).unwrap();
-        let nombres: Vec<&str> = lienzo.salidas.iter().map(|s| s.nombre.as_str()).collect();
+        let lienzo = componer(pantallas).unwrap();
+        let nombres: Vec<&str> = lienzo
+            .copias
+            .iter()
+            .map(|c| c.salida.nombre.as_str())
+            .collect();
         assert_eq!(nombres, vec!["eDP-1"]);
+    }
+
+    #[test]
+    fn la_razon_unica_del_lienzo_es_exacta_con_escalas_distintas() {
+        // Acá decía lo contrario, y de ese comentario salió el informe de que el
+        // recorte se corría. No se corre: `componer` lleva **todas** las
+        // pantallas a la escala mayor, así que la imagen mide exactamente el
+        // layout por esa razón y `escala_de` la calcula sin error. Esta prueba
+        // está para que la afirmación quede fijada y no haya que volver a
+        // deducirla leyendo el bucle.
+        let mut pantallas = HashMap::new();
+        // Una al 100 %: 100x50 lógicos, 100x50 píxeles.
+        pantallas.insert(
+            1,
+            pantalla_llamada("normal", (0, 0, 100, 50), lisa(100, 50, [255, 0, 0, 255])),
+        );
+        // Otra al 200 %: 100x50 lógicos, 200x100 píxeles.
+        pantallas.insert(
+            2,
+            pantalla_llamada("hidpi", (0, 50, 100, 50), lisa(200, 100, [0, 0, 255, 255])),
+        );
+
+        let lienzo = componer(pantallas).unwrap();
+        let layout = crate::captura::layout_de(
+            &lienzo
+                .copias
+                .iter()
+                .map(|c| c.salida.clone())
+                .collect::<Vec<_>>(),
+        );
+
+        // El layout mide 100x100 y la imagen 200x200: la razón es 2 en los dos
+        // ejes, y es la misma para toda la imagen.
+        assert_eq!((lienzo.imagen.width(), lienzo.imagen.height()), (200, 200));
+        assert_eq!(
+            crate::captura::escala_de(lienzo.imagen.dimensions(), layout),
+            (2.0, 2.0)
+        );
+    }
+
+    #[test]
+    fn la_de_menor_escala_guarda_sus_pixeles_y_la_otra_no() {
+        // Los de la estirada hacen falta: recortar del lienzo devuelve una
+        // imagen del doble de tamaño e interpolada. Los de la otra ya están en
+        // el lienzo tal cual, y guardarlos sería duplicar decenas de megabytes.
+        let mut pantallas = HashMap::new();
+        pantallas.insert(
+            1,
+            pantalla_llamada("normal", (0, 0, 100, 50), lisa(100, 50, [255, 0, 0, 255])),
+        );
+        pantallas.insert(
+            2,
+            pantalla_llamada("hidpi", (0, 50, 100, 50), lisa(200, 100, [0, 0, 255, 255])),
+        );
+
+        let lienzo = componer(pantallas).unwrap();
+
+        let normal = &lienzo.copias[0];
+        let hidpi = &lienzo.copias[1];
+        assert_eq!(normal.salida.nombre, "normal");
+        assert!(normal.nativos.is_some(), "la estirada guarda los suyos");
+        assert_eq!(normal.escala(), Some((1.0, 1.0)));
+        assert!(hidpi.nativos.is_none(), "la que manda la escala, no");
+        assert_eq!(hidpi.escala(), None);
+    }
+
+    #[test]
+    fn con_una_sola_pantalla_no_se_guarda_nada_aparte() {
+        // El caso de todos los días: el lienzo **es** la pantalla, así que una
+        // segunda copia serían ocho megabytes de nada.
+        let mut pantallas = HashMap::new();
+        pantallas.insert(1, pantalla((0, 0, 100, 50), lisa(100, 50, [1, 2, 3, 255])));
+
+        let lienzo = componer(pantallas).unwrap();
+        assert!(lienzo.copias[0].nativos.is_none());
+    }
+
+    #[test]
+    fn dos_pantallas_de_escala_fraccionaria_no_dejan_costura() {
+        // Con 1,25 los bordes caen entre píxeles. Redondeando cada ancho por su
+        // cuenta, dos pantallas vecinas se pisan o dejan una columna
+        // transparente en el medio; redondeando los bordes, encajan.
+        let mut pantallas = HashMap::new();
+        // 100 lógicos al 125 % son 125 píxeles.
+        pantallas.insert(
+            1,
+            pantalla_llamada("izq", (0, 0, 100, 40), lisa(125, 50, [255, 0, 0, 255])),
+        );
+        pantallas.insert(
+            2,
+            pantalla_llamada("der", (100, 0, 100, 40), lisa(125, 50, [0, 0, 255, 255])),
+        );
+
+        let lienzo = componer(pantallas).unwrap();
+        assert_eq!((lienzo.imagen.width(), lienzo.imagen.height()), (250, 50));
+
+        // Ni una sola columna sin pintar, y cada mitad con su color.
+        for x in 0..250 {
+            let p = lienzo.imagen.get_pixel(x, 25);
+            assert_eq!(p[3], 255, "columna {x} transparente");
+            if x < 125 {
+                assert_eq!(p[0], 255, "columna {x} tendría que ser la roja");
+            } else {
+                assert_eq!(p[2], 255, "columna {x} tendría que ser la azul");
+            }
+        }
+    }
+
+    #[test]
+    fn una_copia_no_vuelca_sus_pixeles_al_imprimirse() {
+        // El `Debug` derivado de una imagen imprime todos sus bytes, y `Captura`
+        // lleva estas copias adentro: una aserción que falle volcaría decenas de
+        // megabytes. Lo que hace falta es de qué pantalla es y de qué tamaño.
+        let copia = Copia {
+            salida: Monitor::nuevo(
+                "eDP-1",
+                Salida {
+                    x: 0,
+                    y: 0,
+                    ancho: 100,
+                    alto: 50,
+                },
+            ),
+            nativos: Some(lisa(100, 50, [7, 7, 7, 255])),
+        };
+
+        let texto = format!("{copia:?}");
+        assert!(texto.contains("eDP-1"), "{texto}");
+        assert!(texto.contains("100, 50"), "{texto}");
+        assert!(
+            texto.len() < 200,
+            "el volcado tiene {} caracteres: son los píxeles",
+            texto.len()
+        );
     }
 }

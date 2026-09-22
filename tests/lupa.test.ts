@@ -10,6 +10,8 @@ const LIENZO: Lienzo = {
 	salida: { x: 0, y: 1080, ancho: 1920, alto: 1080 },
 	escalaX: 1,
 	escalaY: 1,
+	escalaPropiaX: 1,
+	escalaPropiaY: 1,
 };
 
 describe('fondoDeLupa', () => {
@@ -29,7 +31,15 @@ describe('fondoDeLupa', () => {
 	test('con una pantalla HiDPI la imagen sigue midiendo lo del layout', () => {
 		// La captura sale al doble, y la lupa no puede ampliar el doble de más:
 		// el punto que la cruz señala dejaría de ser el que está debajo.
-		const hidpi: Lienzo = { ...LIENZO, ancho: 3840, alto: 4320, escalaX: 2, escalaY: 2 };
+		const hidpi: Lienzo = {
+			...LIENZO,
+			ancho: 3840,
+			alto: 4320,
+			escalaX: 2,
+			escalaY: 2,
+			escalaPropiaX: 2,
+			escalaPropiaY: 2,
+		};
 		expect(fondoDeLupa({ x: 0, y: 0 }, hidpi, 8, 136).size).toBe('15360px 17280px');
 	});
 });
