@@ -51,7 +51,12 @@ pub fn esperar(segundos: u64) {
 
     let mut id = None;
     for restante in cuenta(segundos) {
-        id = anunciar(restante, id);
+        // El identificador se conserva si un aviso falla: perderlo haría que el
+        // siguiente abra una notificación nueva en vez de reemplazar la
+        // anterior, y ahí se apilarían sobre lo que se está por fotografiar.
+        if let Some(nuevo) = anunciar(restante, id) {
+            id = Some(nuevo);
+        }
         std::thread::sleep(Duration::from_secs(1));
     }
 

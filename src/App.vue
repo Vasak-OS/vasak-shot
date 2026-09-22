@@ -549,6 +549,11 @@ async function conRetardo(segundos: number) {
  * no hay nada que esperar.
  */
 async function entregarPantalla(monitor: Monitor) {
+	// Las preferencias primero, igual que al soltar el botón: las salidas y los
+	// ajustes se piden a la vez, y la barra aparece en cuanto llegan las
+	// primeras. Sin esperar, elegir una pantalla apenas abre la ventana
+	// guardaría un archivo que la preferencia decía que no.
+	await cargando.value;
 	await entregar(
 		comandoAlSoltar(ajustes.value.alSoltar) ?? 'guardar_y_copiar',
 		comoRegion(monitor)

@@ -547,8 +547,11 @@ mod pruebas {
         let layout = captura::layout_de(&salidas);
 
         // Cubren todo: la suma de las áreas es la del encuadre.
-        let suma: i64 = salidas.iter().map(|s| i64::from(s.ancho * s.alto)).sum();
-        assert_eq!(suma, i64::from(layout.ancho * layout.alto));
+        let suma: i64 = salidas
+            .iter()
+            .map(|s| i64::from(s.ancho) * i64::from(s.alto))
+            .sum();
+        assert_eq!(suma, i64::from(layout.ancho) * i64::from(layout.alto));
 
         // Y no se pisan: la de abajo empieza donde termina la de arriba.
         assert_eq!(salidas[0].y + salidas[0].alto, salidas[1].y);

@@ -295,23 +295,28 @@ pub fn layout_de(salidas: &[Monitor]) -> Salida {
         };
     };
 
+    // Sumas y restas saturantes: los números los informa el compositor, y una
+    // geometría absurda —un tamaño cerca de `i32::MAX`— desbordaría. En
+    // depuración eso es un pánico, o sea la captura perdida por un dato que no
+    // controlamos; saturando queda un rectángulo sin sentido pero finito, que es
+    // lo que `escala_de` ya sabe tratar.
     let mut min_x = primera.x;
     let mut min_y = primera.y;
-    let mut max_x = primera.x + primera.ancho;
-    let mut max_y = primera.y + primera.alto;
+    let mut max_x = primera.x.saturating_add(primera.ancho);
+    let mut max_y = primera.y.saturating_add(primera.alto);
 
     for s in &salidas[1..] {
         min_x = min_x.min(s.x);
         min_y = min_y.min(s.y);
-        max_x = max_x.max(s.x + s.ancho);
-        max_y = max_y.max(s.y + s.alto);
+        max_x = max_x.max(s.x.saturating_add(s.ancho));
+        max_y = max_y.max(s.y.saturating_add(s.alto));
     }
 
     Salida {
         x: min_x,
         y: min_y,
-        ancho: max_x - min_x,
-        alto: max_y - min_y,
+        ancho: max_x.saturating_sub(min_x),
+        alto: max_y.saturating_sub(min_y),
     }
 }
 
@@ -558,6 +563,36 @@ mod tests {
                 alto: 0
             }
         );
+    }
+
+    #[test]
+    fn una_geometria_absurda_no_hace_desbordar_el_encuadre() {
+        // Los números los informa el compositor. Un desbordamiento acá es un
+        // pánico en depuración, o sea la captura perdida por un dato ajeno.
+        let salidas = vec![
+            Monitor::nuevo(
+                "raro",
+                Salida {
+                    x: i32::MAX - 10,
+                    y: 0,
+                    ancho: i32::MAX,
+                    alto: 1080,
+                },
+            ),
+            Monitor::nuevo(
+                "normal",
+                Salida {
+                    x: i32::MIN + 10,
+                    y: 0,
+                    ancho: 1920,
+                    alto: 1080,
+                },
+            ),
+        ];
+
+        let encuadre = layout_de(&salidas);
+        assert_eq!(encuadre.ancho, i32::MAX);
+        assert_eq!(encuadre.alto, 1080);
     }
 
     #[test]
