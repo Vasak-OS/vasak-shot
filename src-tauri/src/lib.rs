@@ -19,6 +19,8 @@ pub mod destino;
 mod locales;
 pub mod pantalla;
 pub mod preferencias;
+pub mod ventanas;
+pub mod wayfire;
 
 use captura::Salida;
 use gtk::prelude::*;
@@ -88,7 +90,7 @@ fn posicion_del_puntero(display: &gtk::gdk::Display) -> Option<(i32, i32)> {
 /// contesta otra cosa—: todos significan lo mismo para quien llama, que es
 /// «preguntale a GDK».
 fn cursor_de_wayfire() -> Option<(i32, i32)> {
-    cursor_de_wayfire_en(std::env::var_os("WAYFIRE_SOCKET")?)
+    cursor_de_wayfire_en(wayfire::socket()?)
 }
 
 /// Lo mismo, contra un socket concreto.
@@ -98,43 +100,7 @@ fn cursor_de_wayfire() -> Option<(i32, i32)> {
 /// una prueba que lo modifica le cambia el mundo a las otras — y la que
 /// necesitaba el socket se salteaba sola.
 fn cursor_de_wayfire_en(ruta: impl AsRef<std::path::Path>) -> Option<(i32, i32)> {
-    use std::io::{Read, Write};
-
-    /// Cuánto se espera a cada operación del socket.
-    ///
-    /// Sin esto, un compositor que deja de contestar cuelga la captura para
-    /// siempre: `read_exact` bloquea, y el camino de GDK —que es el que tenía
-    /// que salvar el caso— no se llega a ejecutar nunca. Un segundo es
-    /// larguísimo para una consulta local; lo que importa es que exista.
-    const ESPERA: std::time::Duration = std::time::Duration::from_secs(1);
-
-    /// Techo del cuerpo de la respuesta.
-    ///
-    /// El largo lo dice el otro extremo, y `WAYFIRE_SOCKET` es una variable de
-    /// entorno: quien la controle puede anunciar un marco de gigabytes y hacer
-    /// que esto reserve memoria hasta morirse, en lugar de caer a GDK. La
-    /// respuesta real son unas decenas de bytes.
-    const TECHO: u32 = 64 * 1024;
-
-    let mut sock = std::os::unix::net::UnixStream::connect(ruta).ok()?;
-    sock.set_read_timeout(Some(ESPERA)).ok()?;
-    sock.set_write_timeout(Some(ESPERA)).ok()?;
-
-    let pedido = br#"{"method":"window-rules/get_cursor_position","data":{}}"#;
-    sock.write_all(&(pedido.len() as u32).to_ne_bytes()).ok()?;
-    sock.write_all(pedido).ok()?;
-
-    let mut largo = [0u8; 4];
-    sock.read_exact(&mut largo).ok()?;
-    let largo = u32::from_ne_bytes(largo);
-    if largo > TECHO {
-        return None;
-    }
-
-    let mut cuerpo = vec![0u8; largo as usize];
-    sock.read_exact(&mut cuerpo).ok()?;
-
-    let respuesta: serde_json::Value = serde_json::from_slice(&cuerpo).ok()?;
+    let respuesta = wayfire::pedir(ruta, "window-rules/get_cursor_position")?;
     let pos = respuesta.get("pos")?;
     // Vienen como flotantes: el compositor las lleva en subpíxeles. `floor` y no
     // `as i32` a secas, que trunca hacia cero: con un monitor a la izquierda del
@@ -301,6 +267,13 @@ pub fn run() {
 
     comandos::recordar(tomada);
 
+    // Las ventanas, **en el mismo momento que los píxeles** y antes de que
+    // exista la del selector. Preguntarlo después mostraría el mapa de un
+    // escritorio que ya cambió —y con la superficie propia adentro de la
+    // lista—, mientras que lo que se señala tiene que coincidir con lo que la
+    // imagen congelada muestra.
+    comandos::recordar_ventanas(ventanas::consultar());
+
     tauri::Builder::default()
         // El idioma de la sesión. **Con la ruta explícita de los catálogos**:
         // el plugin sólo prueba rutas relativas al ejecutable y al directorio
@@ -329,6 +302,7 @@ pub fn run() {
             comandos::guardar_y_copiar,
             comandos::ajustes,
             comandos::guardar_ajustes,
+            comandos::ventanas,
         ])
         .setup(|app| {
             // El layer-shell tiene que correr en el hilo principal —GTK aborta
