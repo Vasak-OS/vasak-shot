@@ -144,17 +144,18 @@ const puedeRehacer = computed(() => historial.puedeRehacer(dibujo.value));
 const deshacerDibujo = historial.deshacer;
 const rehacerDibujo = historial.rehacer;
 
-/** Las preferencias, con las de siempre mientras el backend no conteste. */
+/** Las preferencias, con las de por omisión mientras el backend no conteste. */
 const ajustes = ref<Ajustes>(POR_OMISION);
 
 /**
  * La lectura de las preferencias, mientras está en curso.
  *
- * Se guarda para poder esperarla al soltar. Sin eso, un arrastre que termina
- * antes de que el backend conteste se entrega con los valores de siempre —o
- * sea guardando— aunque la preferencia diga «copiar» o «esperar»: un archivo en
- * el disco que nadie pidió. La ventana aparece de golpe y el gesto puede
- * empezar en el primer cuadro.
+ * Se guarda para poder esperarla al soltar. La ventana aparece de golpe y el
+ * gesto puede empezar en el primer cuadro, así que sin esto un arrastre que
+ * termina antes de que el backend conteste se entrega con lo que haya —y lo
+ * que hay es lo de por omisión, que ahora no entrega nada, pero la preferencia
+ * guardada puede decir «guardar y copiar» y entonces el archivo saldría igual
+ * sin que nadie lo haya pedido en esta sesión.
  */
 const cargando = ref<Promise<void> | null>(null);
 const panel = ref(false);
@@ -330,18 +331,18 @@ function mover(evento: MouseEvent) {
 }
 
 /**
- * Soltar cierra el gesto, y entrega.
+ * Soltar cierra el gesto, y entrega si la preferencia lo dice.
  *
- * Las dos cosas, y en ese orden. Cerrarlo es lo que hace que la región deje de
- * seguir al puntero. Entregar es el resto: se arrastra sobre lo que se quiere y
- * al levantar el dedo la captura ya está.
+ * Cerrarlo es lo que hace que la región deje de seguir al puntero, y pasa
+ * siempre. Entregar depende: **por omisión no entrega**, porque al soltar
+ * recién empieza lo que se puede hacer con la captura —anotarla, tapar algo,
+ * correr un borde—, y entregarla sola es no dejar hacer nada de eso. Con
+ * «guardar y copiar» sí: se arrastra sobre lo que se quiere y al levantar el
+ * dedo la captura ya está.
  *
- * **Corregir un borde no entrega.** Quien está moviendo un tirador está
+ * **Corregir un borde no entrega nunca.** Quien está moviendo un tirador está
  * corrigiendo lo que eligió, y entregar ahí sería no dejarlo terminar — que es
- * justamente lo que los tiradores vinieron a permitir. De todos modos sólo se
- * llega a ellos con «esperar», que es la preferencia que no entrega al soltar.
- *
- * Y con `esperar` no entrega nada tampoco acá: quedan los botones.
+ * justamente lo que los tiradores vinieron a permitir.
  */
 async function terminar() {
 	if (enCurso.value) {

@@ -26,10 +26,11 @@ describe('comandoAlSoltar', () => {
 		expect(new Set(ACCIONES).size).toBe(4);
 	});
 
-	test('la primera es la que la herramienta hacía siempre', () => {
+	test('la primera es la de por omisión', () => {
 		// Quien abre el panel por primera vez tiene que encontrar arriba lo que
-		// ya venía pasando, no una opción nueva.
-		expect(ACCIONES[0]).toBe('guardar-y-copiar');
+		// está pasando: buscar en cuál de las cuatro está parado es lo primero
+		// que hace quien viene a cambiarla.
+		expect(ACCIONES[0]).toBe(POR_OMISION.alSoltar);
 	});
 });
 
@@ -64,10 +65,12 @@ describe('POR_OMISION', () => {
 		expect(POR_OMISION.subirServidor).toBeNull();
 	});
 
-	test('mientras el backend no conteste, se guarda y se copia como siempre', () => {
-		// Una respuesta que tarda no puede cambiar lo que la herramienta hace,
-		// sólo retrasarlo.
-		expect(POR_OMISION.alSoltar).toBe('guardar-y-copiar');
+	test('mientras el backend no conteste no se entrega nada', () => {
+		// La ventana abre de golpe y el gesto puede terminar antes que la
+		// respuesta. Esperar deja la selección congelada; entregar sin saber qué
+		// dice la preferencia escribe un archivo que nadie pidió.
+		expect(POR_OMISION.alSoltar).toBe('esperar');
+		expect(comandoAlSoltar(POR_OMISION.alSoltar)).toBeNull();
 		expect(POR_OMISION.carpeta).toBeNull();
 	});
 });

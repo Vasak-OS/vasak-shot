@@ -52,19 +52,23 @@ export interface Guardado {
 /**
  * Las cuatro, en el orden en que se muestran.
  *
- * De la que más hace a la que menos: quien abre el panel por primera vez lee de
- * arriba hacia abajo, y arriba tiene que estar lo que ya venía pasando.
+ * Arriba la de por omisión, que es lo que está pasando cuando alguien abre el
+ * panel por primera vez: buscar en cuál de las cuatro está parado es lo primero
+ * que hace quien viene a cambiarla. Las otras tres, de la que más hace a la que
+ * menos.
  */
-export const ACCIONES: AlSoltar[] = ['guardar-y-copiar', 'guardar', 'copiar', 'esperar'];
+export const ACCIONES: AlSoltar[] = ['esperar', 'guardar-y-copiar', 'guardar', 'copiar'];
 
 /**
  * Mientras el backend no conteste.
  *
- * Es lo que la herramienta hizo siempre, así que una respuesta que tarda no
- * cambia el comportamiento — sólo lo retrasa.
+ * `esperar` es además lo más prudente para el hueco entre que la ventana abre y
+ * que las preferencias llegan: no entrega nada. Si la preferencia guardada dice
+ * otra cosa, lo que se pierde es que el primer arrastre no entregue solo; al
+ * revés —entregar mientras no se sabe— se pierde un archivo que nadie pidió.
  */
 export const POR_OMISION: Ajustes = {
-	alSoltar: 'guardar-y-copiar',
+	alSoltar: 'esperar',
 	carpeta: null,
 	carpetaEfectiva: '',
 	subirA: null,

@@ -15,15 +15,19 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AlSoltar {
-    /// Lo que la herramienta hizo siempre, y lo que se quiere casi siempre.
-    #[default]
+    /// Guardar y copiar de una, sin pasar por los botones.
     GuardarYCopiar,
     Guardar,
     Copiar,
     /// Congelar la selección y dejar decidir con los botones.
     ///
-    /// Es el valor que van a necesitar anotar y ajustar la selección: las dos
-    /// cosas pasan **después** de soltar, y no existen si soltar ya entregó.
+    /// **El de por omisión**, desde que se puede anotar y ajustar la selección:
+    /// las dos cosas pasan *después* de soltar, y no existen si soltar ya
+    /// entregó. Entregar al soltar fue lo correcto mientras elegir la zona era
+    /// todo lo que había para hacer; ahora el gesto termina en una captura que
+    /// todavía se puede recuadrar, tapar o corregir, y entregarla sola es no
+    /// dejar hacer nada de eso.
+    #[default]
     Esperar,
 }
 
@@ -210,6 +214,16 @@ mod tests {
     }
 
     #[test]
+    fn sin_preferencias_soltar_no_entrega_nada() {
+        // El valor de por omisión es una decisión, no un detalle: al soltar
+        // recién empieza lo que se puede hacer con la captura —anotarla, tapar
+        // algo, correr un borde—, y entregarla sola es no dejar hacer nada de
+        // eso. Quien quiera el gesto de un solo tiro lo elige en el panel.
+        assert_eq!(Preferencias::default().al_soltar, AlSoltar::Esperar);
+        assert_eq!(desde_json("{}", HOGAR).al_soltar, AlSoltar::Esperar);
+    }
+
+    #[test]
     fn se_leen_las_cuatro_acciones() {
         for (texto, esperada) in [
             ("guardar-y-copiar", AlSoltar::GuardarYCopiar),
@@ -231,7 +245,7 @@ mod tests {
             r#"{"alSoltar":"mandar-por-paloma","carpeta":"/mnt/fotos"}"#,
             HOGAR,
         );
-        assert_eq!(leidas.al_soltar, AlSoltar::GuardarYCopiar);
+        assert_eq!(leidas.al_soltar, AlSoltar::Esperar);
         assert_eq!(leidas.carpeta, Some(PathBuf::from("/mnt/fotos")));
     }
 
