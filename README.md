@@ -13,14 +13,21 @@ Las capturas de pantalla de VasakOS.
 | `vasak-shot --salida DP-1` | Lo mismo con una sola, la que se llame así |
 | `vasak-shot --retardo 5` | Espera cinco segundos y recién ahí captura |
 
-**Soltar el botón entrega la captura.** El gesto es uno solo: se arrastra sobre lo
-que se quiere y al levantar el dedo ya está. Qué es «entregar» lo decide la
-preferencia de abajo —sin tocar nada, guardar y copiar—, y con «esperar» soltar
-no entrega: congela la selección y deja decidir con los botones.
+**Soltar el botón congela lo elegido, y ahí empieza lo otro.** Al levantar el
+dedo la selección queda quieta, con sus tiradores y la barra de anotación: se
+puede recuadrar algo, tapar lo que no se comparte, correr un borde. Se entrega
+con **Intro**, con **Ctrl+C** o con los botones.
 
-**Un clic sobre una ventana la captura entera.** Al pasar el puntero se resalta
-la que está debajo; el clic la elige con su borde exacto, sin encuadrarla a ojo,
-y entrega como cualquier otra selección. Un clic **fuera** de toda ventana elige
+Eso es lo que hace **«esperar»**, que es la preferencia de por omisión. No
+siempre lo fue: mientras elegir la zona era todo lo que había para hacer,
+entregar al soltar era el gesto más corto posible y era lo correcto. Desde que la
+captura se puede anotar y corregir, entregarla sola es no dejar hacer nada de
+eso. Quien prefiera el tiro único lo elige en las preferencias, y ahí soltar
+vuelve a guardar y copiar de una.
+
+**Un clic sobre una ventana la elige entera.** Al pasar el puntero se resalta la
+que está debajo; el clic la toma con su borde exacto, sin encuadrarla a ojo, y de
+ahí sigue como cualquier otra selección. Un clic **fuera** de toda ventana elige
 **la pantalla entera**, que es lo que el resaltado venía mostrando: el recuadro
 y el nombre del monitor aparecen antes del clic, así que no hay nada que se
 guarde sin haberse anunciado. Antes ese clic no hacía nada, justamente porque no
@@ -35,8 +42,7 @@ para el caso más común—, **Ctrl+C** copia sin guardar, **Esc** cancela.
 
 ### Corregir lo elegido
 
-Con la preferencia en «esperar», la selección queda ahí y se puede acomodar antes
-de entregarla:
+La selección queda ahí y se puede acomodar antes de entregarla:
 
 | Cómo | Qué hace |
 |---|---|
@@ -112,10 +118,9 @@ la región y nada más, que son cuatro números.
 
 La rueda dentada de la barra abre dos cosas:
 
-- **Qué hace soltar el botón**: guardar y copiar (lo de siempre), sólo guardar,
-  sólo copiar, o **esperar** y decidir con los botones. La última es la que hace
-  falta para anotar la captura o ajustar la selección, porque las dos cosas pasan
-  después de soltar.
+- **Qué hace soltar el botón**: **esperar** —lo de por omisión, y lo que deja
+  anotar y ajustar, porque las dos cosas pasan después de soltar—, o entregar de
+  una: guardar y copiar, sólo guardar, o sólo copiar.
 - **En qué carpeta se guarda.** Se escribe a mano: el selector es una superficie
   de capa que tapa todo, y un diálogo de sistema lanzado desde ahí aparece detrás
   o no aparece. Abajo del campo está siempre a la vista dónde van a ir a parar las
