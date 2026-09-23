@@ -229,12 +229,21 @@ heredados, quien lo llamó se queda esperando que el pipe se cierre — y no se 
 mientras el portapapeles tenga la imagen. Desde una terminal parece que la
 herramienta se colgó; desde un atajo, que nunca terminó. Su salida va a `null`.
 
-**`assetProtocol` está desactivado por omisión**, así que `convertFileSrc` queda
-bloqueado por la política de contenido y la imagen no carga. Y eso no se ve: la
-ventana es transparente, así que se veía el escritorio **vivo** debajo y la
-selección parecía funcionar mientras en realidad se elegía sobre una pantalla que
-seguía moviéndose. Ahora la imagen se verifica antes de usarla como fondo, y si no
-carga se dice.
+**La captura entra por el IPC y se dibuja desde un `blob:`, no desde
+`asset://`.** Las dos vías traen la misma imagen; lo que no traen es el mismo
+origen. Una imagen de otro origen —y `asset://` lo es— **contamina** el canvas
+donde se la dibuja, y un canvas contaminado no deja leer sus píxeles ni
+exportarlos: difuminar y pixelar dejan de tapar, y la captura anotada no se puede
+guardar, copiar ni subir. Tampoco avisa, porque la excepción cae adentro del
+`watch` que compone: lo que se ve es un dibujo que no aparece. El `blob:` hereda
+el origen del documento y el canvas queda limpio. Por eso `assetProtocol` está
+apagado y la política de contenido ya no nombra `asset:`.
+
+**La imagen se verifica antes de usarla como fondo.** Si no carga, la ventana
+transparente deja ver el escritorio **vivo** debajo, y la selección parece
+funcionar mientras en realidad se elige sobre una pantalla que sigue moviéndose.
+Una falla que se disfraza de funcionamiento es peor que una que se ve, así que si
+no carga se dice.
 
 ## Dependencias
 

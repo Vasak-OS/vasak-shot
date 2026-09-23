@@ -192,10 +192,6 @@ pub fn recordar(c: captura::Captura) {
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Lienzo {
-    /// La ruta del PNG congelado. El frontend la convierte con `convertFileSrc`:
-    /// `file://` no está permitido por la política de contenido, y está bien que
-    /// no lo esté.
-    pub ruta: String,
     /// El tamaño de la captura **entera**, con todas las salidas.
     pub ancho: u32,
     pub alto: u32,
@@ -251,7 +247,6 @@ pub fn lienzo() -> Result<Lienzo, String> {
         .unwrap_or(escala);
 
     Ok(Lienzo {
-        ruta: c.ruta.to_string_lossy().into_owned(),
         ancho: c.ancho,
         alto: c.alto,
         salida,
@@ -260,6 +255,48 @@ pub fn lienzo() -> Result<Lienzo, String> {
         escala_propia_x: propia.0,
         escala_propia_y: propia.1,
     })
+}
+
+/// Los bytes del PNG congelado.
+///
+/// **Por el IPC y no por una URL `asset://`.** Los dos caminos traen la misma
+/// imagen, pero no con el mismo origen: `asset://` es otro, y una imagen de otro
+/// origen **contamina** el canvas en el que se dibuja. Un canvas contaminado no
+/// deja leer sus píxeles ni exportarlos, que es exactamente lo que necesitan las
+/// herramientas que tapan y lo que necesita entregar una captura anotada.
+///
+/// El navegador lo dejaría pasar si el servidor contestara con las cabeceras de
+/// CORS y la imagen se pidiera con `crossOrigin`, y Tauri **manda** esa cabecera
+/// — pero WebKitGTK sólo la mira en los esquemas que se registran como
+/// habilitados para CORS, y wry registra los suyos como seguros y nada más. Así
+/// que por ahí no hay arreglo desde acá.
+///
+/// Con los bytes en la mano, el frontend arma un `blob:` que **hereda su propio
+/// origen**, y el canvas queda limpio. Cuestan una copia de unos pocos megabytes
+/// una sola vez, al abrir.
+///
+/// Van como cuerpo crudo: adentro de un JSON serían una lista de números y
+/// costarían un orden de magnitud más. Es el mismo trato que reciben los bytes
+/// que viajan en la otra dirección al guardar una captura anotada.
+#[tauri::command]
+pub fn imagen() -> Result<tauri::ipc::Response, String> {
+    let guardia = pendiente()
+        .lock()
+        .map_err(|_| "el estado de la captura quedó envenenado".to_string())?;
+    let c = guardia
+        .as_ref()
+        .ok_or_else(|| "todavía no hay ninguna captura".to_string())?;
+    Ok(tauri::ipc::Response::new(leer_el_png(&c.ruta)?))
+}
+
+/// Los bytes del archivo, con el error diciendo **cuál**.
+///
+/// Aparte del comando para poder probarlo: `imagen` toca el estado global de la
+/// captura pendiente, y una prueba que lo pise se cruza con las demás, que corren
+/// en el mismo proceso.
+fn leer_el_png(ruta: &std::path::Path) -> Result<Vec<u8>, String> {
+    std::fs::read(ruta)
+        .map_err(|e| format!("no se pudo leer la captura en {}: {e}", ruta.display()))
 }
 
 /// La salida del selector y la escala de la captura, con respaldo razonable.
@@ -1006,5 +1043,37 @@ mod pruebas {
                 }
             }
         );
+    }
+
+    /// El PNG que el frontend va a convertir en `blob:`.
+    ///
+    /// Que los bytes lleguen **enteros e iguales** es todo lo que este camino
+    /// tiene que garantizar: lo que el canvas dibuje después sale de acá, y una
+    /// copia a medias se vería como una imagen cortada y no como un error.
+    #[test]
+    fn los_bytes_del_png_llegan_tal_cual() {
+        let dir = std::env::temp_dir().join(format!("vasak-shot-prueba-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("no se pudo crear el directorio de la prueba");
+        let ruta = dir.join("captura.png");
+        // Un encabezado de PNG de verdad: bytes que no son texto, que es lo que
+        // distingue un camino crudo de uno que pasa por JSON.
+        let contenido: Vec<u8> = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff];
+        std::fs::write(&ruta, &contenido).expect("no se pudo escribir la captura de la prueba");
+
+        assert_eq!(leer_el_png(&ruta), Ok(contenido));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Sin archivo, el error dice **qué** ruta faltó.
+    ///
+    /// Un «no such file or directory» pelado manda a buscar en todo el proceso
+    /// cuál de los archivos es; con la ruta adentro, el aviso que ve la persona
+    /// ya nombra el que hay que mirar.
+    #[test]
+    fn si_el_png_no_esta_el_error_nombra_la_ruta() {
+        let ruta = std::env::temp_dir().join("vasak-shot-que-no-existe-jamas.png");
+        let e = leer_el_png(&ruta).expect_err("leer un archivo que no existe tiene que fallar");
+        assert!(e.contains("vasak-shot-que-no-existe-jamas.png"), "{e}");
     }
 }

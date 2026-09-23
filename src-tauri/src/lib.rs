@@ -348,6 +348,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             comandos::lienzo,
+            comandos::imagen,
             comandos::guardar,
             comandos::copiar,
             comandos::guardar_y_copiar,

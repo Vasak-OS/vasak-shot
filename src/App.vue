@@ -7,7 +7,7 @@
  * lo que la persona vio al apretar la tecla, no sobre una pantalla que sigue
  * cambiando debajo mientras arrastra.
  */
-import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useI18n } from '@vasakgroup/tauri-plugin-i18n';
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
@@ -665,11 +665,17 @@ onMounted(async () => {
 	try {
 		const l = await invoke<Lienzo>('lienzo');
 		lienzo.value = l;
-		// `convertFileSrc` y no `file://`: la política de contenido no permite
-		// rutas absolutas de archivo, y está bien que no lo haga. Requiere que
-		// `assetProtocol` esté habilitado en `tauri.conf.json` — sin eso la URL
-		// queda bloqueada.
-		const url = convertFileSrc(l.ruta);
+		// Los bytes por el IPC y un `blob:`, y no la URL `asset://` que devolvía
+		// `convertFileSrc`.
+		//
+		// No es una preferencia de estilo: `asset://` es **otro origen**, y una
+		// imagen de otro origen contamina el canvas donde se la dibuja. Un canvas
+		// contaminado no deja leer sus píxeles —o sea que difuminar y pixelar no
+		// tapan nada— ni exportarlos —o sea que una captura anotada no se puede
+		// guardar, copiar ni subir—. Un `blob:` hereda el origen de este
+		// documento, así que el canvas queda limpio. Ver el comando `imagen`.
+		const bytes = await invoke<ArrayBuffer>('imagen');
+		const url = URL.createObjectURL(new Blob([bytes], { type: 'image/png' }));
 
 		// Se comprueba que cargue **antes** de usarla como fondo.
 		//
@@ -696,7 +702,14 @@ watch(escribiendo, async (abierto) => {
 	campoDeTexto.value?.focus();
 });
 
-onUnmounted(() => window.removeEventListener('keydown', alTeclado));
+onUnmounted(() => {
+	window.removeEventListener('keydown', alTeclado);
+	// El `blob:` vive mientras viva el documento aunque nadie lo mire, y son
+	// varios megabytes. La ventana se cierra enseguida y el proceso se lleva
+	// todo, pero soltarlo acá es lo que hace que eso sea una casualidad y no la
+	// única razón por la que no se acumula.
+	if (fondo.value) URL.revokeObjectURL(fondo.value);
+});
 
 /**
  * El fondo: **el pedazo de la captura que corresponde a esta pantalla**.
