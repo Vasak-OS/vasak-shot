@@ -278,15 +278,28 @@ pub fn lienzo() -> Result<Lienzo, String> {
 /// Van como cuerpo crudo: adentro de un JSON serían una lista de números y
 /// costarían un orden de magnitud más. Es el mismo trato que reciben los bytes
 /// que viajan en la otra dirección al guardar una captura anotada.
+///
+/// **La lectura no pasa por el hilo principal.** Un comando síncrono corre ahí,
+/// y esto lee del disco una captura de todas las pantallas: unos cuantos
+/// megabytes. Mientras dura, el hilo principal es también el que atiende la
+/// ventana del selector, así que la demora se vería. Del candado sale una copia
+/// de la ruta y nada más; lo que tarda pasa afuera, sin él.
 #[tauri::command]
-pub fn imagen() -> Result<tauri::ipc::Response, String> {
-    let guardia = pendiente()
-        .lock()
-        .map_err(|_| "el estado de la captura quedó envenenado".to_string())?;
-    let c = guardia
-        .as_ref()
-        .ok_or_else(|| "todavía no hay ninguna captura".to_string())?;
-    Ok(tauri::ipc::Response::new(leer_el_png(&c.ruta)?))
+pub async fn imagen() -> Result<tauri::ipc::Response, String> {
+    let ruta = {
+        let guardia = pendiente()
+            .lock()
+            .map_err(|_| "el estado de la captura quedó envenenado".to_string())?;
+        guardia
+            .as_ref()
+            .ok_or_else(|| "todavía no hay ninguna captura".to_string())?
+            .ruta
+            .clone()
+    };
+    let bytes = tauri::async_runtime::spawn_blocking(move || leer_el_png(&ruta))
+        .await
+        .map_err(|e| format!("la lectura de la captura no llegó a terminar: {e}"))??;
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
 /// Los bytes del archivo, con el error diciendo **cuál**.

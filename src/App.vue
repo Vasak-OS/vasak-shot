@@ -30,6 +30,7 @@ import { comenzar, continuar, vale } from '@/tools/gesto';
 import * as historial from '@/tools/historial';
 import { interpolar } from '@/tools/interpolar';
 import { type Lienzo, medidaEnCss } from '@/tools/lienzo';
+import { withTempObjectUrl } from '@/tools/object-url';
 import {
 	type Ajustes,
 	type Comando,
@@ -653,6 +654,9 @@ async function subir() {
 	}
 }
 
+/** Si la ventana ya se cerró: lo que quedó a medio cargar no tiene dueño. */
+let desmontado = false;
+
 onMounted(async () => {
 	window.addEventListener('keydown', alTeclado);
 	cargando.value = cargarAjustes();
@@ -675,8 +679,7 @@ onMounted(async () => {
 		// guardar, copiar ni subir—. Un `blob:` hereda el origen de este
 		// documento, así que el canvas queda limpio. Ver el comando `imagen`.
 		const bytes = await invoke<ArrayBuffer>('imagen');
-		const url = URL.createObjectURL(new Blob([bytes], { type: 'image/png' }));
-
+		const blob = new Blob([bytes], { type: 'image/png' });
 		// Se comprueba que cargue **antes** de usarla como fondo.
 		//
 		// Sin esto, una imagen bloqueada dejaba la ventana transparente sobre el
@@ -684,13 +687,18 @@ onMounted(async () => {
 		// selección parecía funcionar mientras en realidad se estaba eligiendo
 		// sobre una pantalla que seguía moviéndose. Una falla que se disfraza de
 		// funcionamiento es peor que una que se ve.
-		await new Promise<void>((listo, falla) => {
-			const prueba = new Image();
-			prueba.onload = () => listo();
-			prueba.onerror = () => falla(new Error(t('shot.errorImagen')));
-			prueba.src = url;
-		});
-		fondo.value = url;
+		fondo.value =
+			(await withTempObjectUrl(blob, async (url) => {
+				await new Promise<void>((listo, falla) => {
+					const prueba = new Image();
+					prueba.onload = () => listo();
+					prueba.onerror = () => falla(new Error(t('shot.errorImagen')));
+					prueba.src = url;
+				});
+				// Si la ventana se cerró mientras la imagen cargaba, `onUnmounted` ya
+				// pasó y no vuelve: quedársela sería dejarla sin nadie que la suelte.
+				return !desmontado;
+			})) ?? '';
 	} catch (e) {
 		error.value = String(e);
 	}
@@ -703,6 +711,7 @@ watch(escribiendo, async (abierto) => {
 });
 
 onUnmounted(() => {
+	desmontado = true;
 	window.removeEventListener('keydown', alTeclado);
 	// El `blob:` vive mientras viva el documento aunque nadie lo mire, y son
 	// varios megabytes. La ventana se cierra enseguida y el proceso se lleva
