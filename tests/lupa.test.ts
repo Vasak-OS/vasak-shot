@@ -4,7 +4,7 @@ import { fondoDeLupa, posicionDeLupa } from '@/tools/lupa';
 
 /** Dos monitores apilados: el selector está en el de abajo. */
 const LIENZO: Lienzo = {
-	ruta: '/tmp/captura.png',
+	
 	ancho: 1920,
 	alto: 2160,
 	salida: { x: 0, y: 1080, ancho: 1920, alto: 1080 },

@@ -15,7 +15,6 @@ export interface Salida {
 }
 
 export interface Lienzo {
-	ruta: string;
 	/** El tamaño de la captura entera, con todas las salidas. */
 	ancho: number;
 	alto: number;

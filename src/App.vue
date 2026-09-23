@@ -7,7 +7,7 @@
  * lo que la persona vio al apretar la tecla, no sobre una pantalla que sigue
  * cambiando debajo mientras arrastra.
  */
-import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useI18n } from '@vasakgroup/tauri-plugin-i18n';
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
@@ -30,6 +30,7 @@ import { comenzar, continuar, vale } from '@/tools/gesto';
 import * as historial from '@/tools/historial';
 import { interpolar } from '@/tools/interpolar';
 import { type Lienzo, medidaEnCss } from '@/tools/lienzo';
+import { withTempObjectUrl } from '@/tools/object-url';
 import {
 	type Ajustes,
 	type Comando,
@@ -653,6 +654,9 @@ async function subir() {
 	}
 }
 
+/** Si la ventana ya se cerró: lo que quedó a medio cargar no tiene dueño. */
+let desmontado = false;
+
 onMounted(async () => {
 	window.addEventListener('keydown', alTeclado);
 	cargando.value = cargarAjustes();
@@ -665,12 +669,17 @@ onMounted(async () => {
 	try {
 		const l = await invoke<Lienzo>('lienzo');
 		lienzo.value = l;
-		// `convertFileSrc` y no `file://`: la política de contenido no permite
-		// rutas absolutas de archivo, y está bien que no lo haga. Requiere que
-		// `assetProtocol` esté habilitado en `tauri.conf.json` — sin eso la URL
-		// queda bloqueada.
-		const url = convertFileSrc(l.ruta);
-
+		// Los bytes por el IPC y un `blob:`, y no la URL `asset://` que devolvía
+		// `convertFileSrc`.
+		//
+		// No es una preferencia de estilo: `asset://` es **otro origen**, y una
+		// imagen de otro origen contamina el canvas donde se la dibuja. Un canvas
+		// contaminado no deja leer sus píxeles —o sea que difuminar y pixelar no
+		// tapan nada— ni exportarlos —o sea que una captura anotada no se puede
+		// guardar, copiar ni subir—. Un `blob:` hereda el origen de este
+		// documento, así que el canvas queda limpio. Ver el comando `imagen`.
+		const bytes = await invoke<ArrayBuffer>('imagen');
+		const blob = new Blob([bytes], { type: 'image/png' });
 		// Se comprueba que cargue **antes** de usarla como fondo.
 		//
 		// Sin esto, una imagen bloqueada dejaba la ventana transparente sobre el
@@ -678,13 +687,18 @@ onMounted(async () => {
 		// selección parecía funcionar mientras en realidad se estaba eligiendo
 		// sobre una pantalla que seguía moviéndose. Una falla que se disfraza de
 		// funcionamiento es peor que una que se ve.
-		await new Promise<void>((listo, falla) => {
-			const prueba = new Image();
-			prueba.onload = () => listo();
-			prueba.onerror = () => falla(new Error(t('shot.errorImagen')));
-			prueba.src = url;
-		});
-		fondo.value = url;
+		fondo.value =
+			(await withTempObjectUrl(blob, async (url) => {
+				await new Promise<void>((listo, falla) => {
+					const prueba = new Image();
+					prueba.onload = () => listo();
+					prueba.onerror = () => falla(new Error(t('shot.errorImagen')));
+					prueba.src = url;
+				});
+				// Si la ventana se cerró mientras la imagen cargaba, `onUnmounted` ya
+				// pasó y no vuelve: quedársela sería dejarla sin nadie que la suelte.
+				return !desmontado;
+			})) ?? '';
 	} catch (e) {
 		error.value = String(e);
 	}
@@ -696,7 +710,15 @@ watch(escribiendo, async (abierto) => {
 	campoDeTexto.value?.focus();
 });
 
-onUnmounted(() => window.removeEventListener('keydown', alTeclado));
+onUnmounted(() => {
+	desmontado = true;
+	window.removeEventListener('keydown', alTeclado);
+	// El `blob:` vive mientras viva el documento aunque nadie lo mire, y son
+	// varios megabytes. La ventana se cierra enseguida y el proceso se lleva
+	// todo, pero soltarlo acá es lo que hace que eso sea una casualidad y no la
+	// única razón por la que no se acumula.
+	if (fondo.value) URL.revokeObjectURL(fondo.value);
+});
 
 /**
  * El fondo: **el pedazo de la captura que corresponde a esta pantalla**.
