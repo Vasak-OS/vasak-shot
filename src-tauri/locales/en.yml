@@ -42,6 +42,7 @@ shot:
   herramientaLapiz: Pen
   herramientaResaltador: Highlighter
   herramientaTexto: Text
+  textoAnotacion: Annotation text
   herramientaPaso: Step
   herramientaDifuminar: Blur
   herramientaPixelar: Pixelate

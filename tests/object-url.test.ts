@@ -44,7 +44,7 @@ describe('la URL de objeto que se suelta sola', () => {
 			throw new Error('la imagen no cargó');
 		});
 
-		expect(intento).rejects.toThrow('la imagen no cargó');
+		await expect(intento).rejects.toThrow('la imagen no cargó');
 		await intento.catch(() => {});
 		expect(await sigueViva(vista)).toBe(false);
 	});

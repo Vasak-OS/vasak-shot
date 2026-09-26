@@ -848,6 +848,7 @@ const estilo = computed(() => {
 			v-model="escribiendo.texto"
 			data-sin-arrastre
 			type="text"
+			:aria-label="t('shot.textoAnotacion')"
 			class="absolute rounded-corner border border-primary bg-ui-bg/90 px-1 text-tx-main"
 			:style="{ left: `${escribiendo.punto.x}px`, top: `${escribiendo.punto.y}px` }"
 			@keydown.enter.stop.prevent="cerrarTexto()"
