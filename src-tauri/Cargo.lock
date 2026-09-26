@@ -4297,7 +4297,7 @@ dependencies = [
 
 [[package]]
 name = "vasak-shot"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "dirs",
  "gtk",
