@@ -91,7 +91,7 @@ describe('deshacer y rehacer', () => {
 		// larga se lleva la memoria de a poco y nadie lo relaciona.
 		let h = crear();
 		for (let i = 0; i < TOPE + 50; i++) h = agregar(h, unaAnotacion(i));
-		expect(h.atras.length).toBe(TOPE);
+		expect(h.atras).toHaveLength(TOPE);
 		// Y lo que sigue adentro del techo se sigue pudiendo deshacer.
 		expect(puedeDeshacer(h)).toBe(true);
 	});

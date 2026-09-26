@@ -22,7 +22,7 @@ describe('comandoAlSoltar', () => {
 			const comando = comandoAlSoltar(accion);
 			expect(comando === null || typeof comando === 'string').toBe(true);
 		}
-		expect(ACCIONES.length).toBe(4);
+		expect(ACCIONES).toHaveLength(4);
 		expect(new Set(ACCIONES).size).toBe(4);
 	});
 
