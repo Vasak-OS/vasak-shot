@@ -1,5 +1,7 @@
-# Los chequeos viven en el repositorio `.github` de la organización, así que
-# acá sólo se los llama. Cambiarlos es cambiarlos en un solo lugar.
+# Los chequeos que valen para toda la organización viven en el repositorio
+# `.github`, así que acá se los llama y no se los copia: cambiarlos es
+# cambiarlos en un solo lugar. Lo que queda debajo es lo que **no** se puede
+# compartir, y por eso vive sólo en este repositorio.
 name: CI
 
 on:
@@ -30,3 +32,84 @@ jobs:
     # que ya se cumple con la 2.5.
     with:
       bibliotecas_cortan: true
+
+  # ── El backend de Rust ──────────────────────────────────────────────────
+  #
+  # `app / revisar` no compila este crate, y no por casualidad: su entrada
+  # `pruebas_rust` espera el nombre de un crate que **no** dependa de Tauri
+  # (`-p uno -p otro`), porque compilar un crate de Tauri necesita webkit2gtk y
+  # medio escritorio, que son minutos de apt en cada corrida. Este
+  # repositorio es un crate de Tauri de punta a punta y no tiene ningún otro
+  # miembro que elegir, así que esa entrada no tiene nada que nombrar: los 159
+  # tests de `src-tauri` no corrían en ningún pull request.
+  #
+  # El trabajo va **acá** y no en el flujo compartido por ese mismo costo. Si el
+  # `apt` se sumara al flujo común, lo pagarían los treinta y pico repositorios
+  # que lo llaman y casi ninguno lo usaría; hoy lo enciende cada repositorio
+  # que lo necesita, y sólo lo paga el que lo pidió. Agregar este trabajo al
+  # común es un paso aparte, cuando haya más de un repositorio que lo quiera.
+  pruebas_rust:
+    runs-on: ubuntu-latest
+    # Sólo lectura, como el de arriba: clona, instala paquetes del sistema y
+    # corre pruebas. No escribe en el repositorio, no comenta, no etiqueta.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          # Sin dejar el token en `.git/config`: acá nada empuja, y un token
+          # guardado en disco es un token que cualquier paso siguiente puede
+          # leer.
+          persist-credentials: false
+
+      - name: Las dependencias de sistema de Tauri
+        # La lista sale de los `.pc` que este grafo pide de verdad, no de la
+        # lista de Tauri: `cargo metadata` sobre el `Cargo.lock` de este
+        # repositorio dice que son catorce los módulos que los `-sys` buscan por
+        # pkg-config. Trece salen de los `Depends` de `libwebkit2gtk-4.1-dev`, y
+        # el que queda es el de abajo.
+        #
+        #   libwebkit2gtk-4.1-dev → webkit2gtk-4.1, javascriptcoregtk-4.1,
+        #                           libsoup-3.0, gtk+-3.0, gdk-3.0, gdk-x11-3.0,
+        #                           atk, cairo, cairo-gobject, gdk-pixbuf-2.0,
+        #                           glib-2.0, gobject-2.0, gio-2.0, pango
+        #   libgtk-layer-shell-dev → gtk-layer-shell-0
+        #
+        # Que un `.pc` falte no es un aviso: los `build.rs` de los `-sys` llaman
+        # a `process::exit(1)`, así que se ve como un crate que no compila, a
+        # mitad del grafo y muy lejos de la causa.
+        #
+        # `libgtk-layer-shell-dev` no viene en la lista de Tauri porque Tauri no
+        # lo necesita: acá la ventana de recorte no puede ser una ventana
+        # normal —tapa el panel entero—, así que va en la capa del compositor, y
+        # `gtk-layer-shell` es dependencia directa del crate.
+        #
+        # `lld` tampoco viene de Tauri, sino de este repositorio:
+        # `src-tauri/.cargo/config.toml` pasa `-fuse-ld=lld` en todos los enlaces
+        # porque linkea más rápido, y la imagen de `ubuntu-latest` no lo trae —
+        # viene con Clang, que no lo incluye—. Por eso está explícito en vez de
+        # confiar en que algún día la imagen lo sume.
+        #
+        # `build-essential` está por el compilador de C, que necesitan los crates
+        # que traen código en C aunque no sea el de la aplicación.
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes \
+            libwebkit2gtk-4.1-dev \
+            libgtk-layer-shell-dev \
+            build-essential \
+            lld
+
+      - name: Las pruebas de Rust
+        # `--locked` y no a secas: es lo que compila `makepkg`, así que el
+        # candado desfasado se ve acá y no cuando alguien empaqueta. El formato
+        # no se repite: el flujo compartido ya lo corre, y sólo sobre los `.rs`
+        # que toca el PR.
+        #
+        # `working-directory` en vez de un `cd` en el script: deja el directorio
+        # en el lugar esperado aunque el paso falle, y evita meter una ruta en
+        # una cadena de bash.
+        run: cargo test --locked
+        working-directory: src-tauri
