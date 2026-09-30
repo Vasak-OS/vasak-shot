@@ -12,6 +12,10 @@
 //! encontraba `libgtk-layer-shell.so.0`. `libdbus-1-3` sí llega con `gtk3`, pero
 //! el binario la enlaza directo y lo que se enlaza se declara.
 //!
+//! Después faltaba la otra mitad: lo que la aplicación ejecuta sin enlazarlo
+//! —`wl-copy`, `notify-send`, `xdg-open` y `curl`—, que la receta de Arch sí
+//! traía y el `.deb` no.
+//!
 //! Lo que se declara se audita con `readelf -d … | grep NEEDED`, nunca con
 //! `ldd`. Estas pruebas no reemplazan esa auditoría: cuidan que no vuelva a
 //! entrar lo que ya se sacó y que no falte lo que se sabe que se enlaza.
@@ -132,4 +136,36 @@ fn esta_la_capa_de_superposicion_del_compositor() {
         "la superficie de selección va en la capa del compositor: sin esto el \
          .deb instala bien y la aplicación no arranca"
     );
+}
+
+/// `libwayland-client` no va: el crate de Wayland trae su propia
+/// implementación del protocolo y el binario no la enlaza. Si un día se
+/// enciende su feature de enlazar la del sistema, se agrega a la lista y a la
+/// prueba de arriba a la vez.
+#[test]
+fn no_se_declara_libwayland_que_no_se_enlaza() {
+    assert!(
+        !deb_depends().iter().any(|n| n == "libwayland-client0"),
+        "ningún NEEDED nombra libwayland-client.so.0"
+    );
+}
+
+/// Lo que no se enlaza pero la aplicación ejecuta, y la receta de Arch ya
+/// declara. Sin `wl-copy` la captura no llega al portapapeles, sin
+/// `notify-send` no hay aviso ni cuenta regresiva del retardo, sin `xdg-open`
+/// el aviso no abre nada y sin `curl` no hay subida. Faltaban los cuatro.
+#[test]
+fn estan_los_programas_que_se_usan_sin_enlazarlos() {
+    let depends = deb_depends();
+    for (program, package) in [
+        ("wl-copy", "wl-clipboard"),
+        ("notify-send", "libnotify-bin"),
+        ("xdg-open", "xdg-utils"),
+        ("curl", "curl"),
+    ] {
+        assert!(
+            depends.iter().any(|n| n == package),
+            "la aplicación ejecuta {program} y el .deb no declara {package}"
+        );
+    }
 }
