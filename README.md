@@ -1,343 +1,370 @@
-# vasak-shot
+# Vasak shot
 
-Las capturas de pantalla de VasakOS.
 
-## Cómo se usa
 
-| Cómo | Qué hace |
-|---|---|
-| `Impr Pant` | Abre el selector: arrastrá una zona, o apretá Intro para toda la pantalla |
-| `Mayús+Impr Pant` | Guarda toda la pantalla directo, sin interfaz |
-| `vasak-shot` | Lo mismo que la tecla: abre el selector |
-| `vasak-shot --pantalla` | Guarda y copia todas las pantallas juntas, imprime la ruta y sale |
-| `vasak-shot --salida DP-1` | Lo mismo con una sola, la que se llame así |
-| `vasak-shot --retardo 5` | Espera cinco segundos y recién ahí captura |
+---
 
-**Soltar el botón congela lo elegido, y ahí empieza lo otro.** Al levantar el
-dedo la selección queda quieta, con sus tiradores y la barra de anotación: se
-puede recuadrar algo, tapar lo que no se comparte, correr un borde. Se entrega
-con **Intro**, con **Ctrl+C** o con los botones.
+## Tecnología
 
-Eso es lo que hace **«esperar»**, que es la preferencia de por omisión. No
-siempre lo fue: mientras elegir la zona era todo lo que había para hacer,
-entregar al soltar era el gesto más corto posible y era lo correcto. Desde que la
-captura se puede anotar y corregir, entregarla sola es no dejar hacer nada de
-eso. Quien prefiera el tiro único lo elige en las preferencias, y ahí soltar
-vuelve a guardar y copiar de una.
+[![Rust](https://img.shields.io/badge/Rust-1.82%2B-orange?style=flat&logo=rust)](https://www.rust-lang.org/) [![Tauri](https://img.shields.io/badge/Tauri-2.0-24283b?style=flat&logo=tauri)](https://tauri.app/) [![Vue](https://img.shields.io/badge/Vue-3.5-42b883?style=flat&logo=vue.js)](https://vuejs.org/) [![TypeScript](https://img.shields.io/badge/TypeScript-5.6-3178c6?style=flat&logo=typescript)](https://www.typescriptlang.org/)
 
-**Un clic sobre una ventana la elige entera.** Al pasar el puntero se resalta la
-que está debajo; el clic la toma con su borde exacto, sin encuadrarla a ojo, y de
-ahí sigue como cualquier otra selección. Un clic **fuera** de toda ventana elige
-**la pantalla entera**, que es lo que el resaltado venía mostrando: el recuadro
-y el nombre del monitor aparecen antes del clic, así que no hay nada que se
-guarde sin haberse anunciado. Antes ese clic no hacía nada, justamente porque no
-había forma de saber qué iba a pasar.
+## Estado
 
-Lo que gana bajo el puntero va de lo más chico a lo más grande: región
-arrastrada, después ventana, después pantalla.
+[![CI](https://github.com/Vasak-OS/vasak-shot/actions/workflows/ci.yml/badge.svg)](https://github.com/Vasak-OS/vasak-shot/actions/workflows/ci.yml)
+[![Versión](https://img.shields.io/github/v/release/Vasak-OS/vasak-shot?style=flat&label=Versi%C3%B3n)](https://github.com/Vasak-OS/vasak-shot/releases)
+[![Licencia](https://img.shields.io/github/license/Vasak-OS/vasak-shot?style=flat)](LICENSE)
+[![Cobertura](https://sonarcloud.io/api/project_badges/measure?project=Vasak-OS_vasak-shot&metric=coverage&style=flat)](https://sonarcloud.io/summary/new_code?id=Vasak-OS_vasak-shot)
+[![Quality Gate](https://sonarcloud.io/api/project_badges/measure?project=Vasak-OS_vasak-shot&metric=alert_status&style=flat)](https://sonarcloud.io/summary/new_code?id=Vasak-OS_vasak-shot)
+[![Tamaño repo](https://img.shields.io/github/repo-size/Vasak-OS/vasak-shot?style=flat)](https://github.com/Vasak-OS/vasak-shot)
 
-El resto del selector sigue ahí para lo que no es un arrastre: **Intro** guarda y
-copia —y sin arrastrar nada captura la pantalla entera, que es el camino más corto
-para el caso más común—, **Ctrl+C** copia sin guardar, **Esc** cancela.
+---
 
-### Corregir lo elegido
+## Descripción
 
-La selección queda ahí y se puede acomodar antes de entregarla:
 
-| Cómo | Qué hace |
-|---|---|
-| Los ocho tiradores | Mueven ese borde. Los de esquina, los dos que tocan |
-| Arrastrar adentro | Corre la selección entera sin cambiarle el tamaño |
-| Flechas | Corren la selección un píxel; con **Mayús**, diez |
-| **Ctrl**+flechas | Mueven el borde de abajo a la derecha, o sea redimensionan |
 
-Los tiradores aparecen con la barra de anotación en «Ajustar»: con una
-herramienta tomada, arrastrar adentro dibuja.
+**Para el usuario:** 
 
-Cruzar un borde más allá del opuesto **da vuelta** la selección en lugar de
-dejarla en cero, y nada se puede sacar de la pantalla.
+**Integración VasakOS:** Integra con el ecosistema VasakOS vía D-Bus y configuración compartida.
 
-Mientras se elige o se corrige aparece una **lupa** con la captura ampliada y las
-coordenadas: es lo que permite parar en el píxel que se quiere y no en el de al
-lado. Se da vuelta sola contra los bordes, que es justo donde más se la necesita.
+---
 
-## Anotar
+## Arquitectura (diagramas)
 
-Con la selección hecha aparece la barra: diez herramientas —recuadro, elipse,
-línea, flecha, lápiz, resaltador, texto, pasos numerados, difuminar y pixelar—,
-el color, el grosor y **deshacer** (`Ctrl+Z`, y `Ctrl+Mayús+Z` para rehacer).
-El recuadro y la elipse van rellenos o al aire.
+> Copia y pega la plantilla que necesites, descomenta y adapta.
 
-El color, el grosor y el relleno se recuerdan **por herramienta**: elegir rojo
-para la flecha no cambia el del resaltador.
+### Flujo de datos
 
-El primer botón de la barra suelta la herramienta y vuelve al modo en el que se
-ajusta la selección, que es donde están los tiradores.
-
-**Las anotaciones son datos hasta el final.** Lo que se dibuja es una lista de
-formas con su color y su grosor, no píxeles: de ahí sale deshacer, y de ahí sale
-que el archivo se componga una sola vez.
-
-### Tapar lo que no se comparte
-
-Difuminar y pixelar no dibujan encima: **transforman los píxeles de abajo**. Eso
-trae dos cosas que importan.
-
-**El orden se respeta.** Una flecha dibujada antes de un difuminado que la cruza
-queda difuminada; dibujada después, queda nítida encima.
-
-**Y lo tapado queda tapado de verdad.** Las intensidades por omisión están
-elegidas mirando un renglón de terminal —que es lo que de verdad se comparte— y
-no una cara en una foto: un difuminado flojo sobre texto grande se lee igual, y
-un mosaico chico sobre texto monoespaciado se puede revertir. Hay pruebas que lo
-comprueban midiendo el contraste que queda.
-
-## Por qué el archivo lo compone el selector y no Rust
-
-Lo que se guarda es **el mismo mapa de bits que se ve**: el canvas de la
-anotación se arma en el tamaño real de la captura y ése es el archivo.
-
-El plan era al revés —mandar la lista de anotaciones y pintarlas en Rust, para no
-cruzar megabytes por el IPC— y no se sostiene, por dos razones que aparecen al
-escribirlo:
-
-- El canvas suaviza los bordes de todo lo que dibuja y un dibujante de píxeles a
-  mano no. Cada recuadro y cada flecha saldrían distintos de como se vieron.
-- El texto necesita una fuente y sus métricas. Hacer coincidir la tipografía del
-  navegador con la de un rasterizador de Rust es una pelea que no se gana.
-
-Y tapar una zona **exige** que la vista previa y el archivo coincidan: la única
-manera de que coincidan siempre es que sean la misma composición.
-
-El costo es el que se quería evitar, acotado: el PNG cruza el IPC por el canal
-**crudo** de Tauri —el cuerpo entero del pedido son los bytes, no un JSON con una
-lista de números— y sólo cuando hay algo dibujado. Sin anotaciones sigue viajando
-la región y nada más, que son cuatro números.
-
-## Preferencias
-
-La rueda dentada de la barra abre dos cosas:
-
-- **Qué hace soltar el botón**: **esperar** —lo de por omisión, y lo que deja
-  anotar y ajustar, porque las dos cosas pasan después de soltar—, o entregar de
-  una: guardar y copiar, sólo guardar, o sólo copiar.
-- **En qué carpeta se guarda.** Se escribe a mano: el selector es una superficie
-  de capa que tapa todo, y un diálogo de sistema lanzado desde ahí aparece detrás
-  o no aparece. Abajo del campo está siempre a la vista dónde van a ir a parar las
-  capturas ahora mismo.
-
-Las preferencias viven en `~/.config/vasak-shot/preferencias.json`. Un archivo que
-no está o que está roto **no** es un error: quedan los valores de siempre y la
-captura sigue su camino.
-
-Sin elegir carpeta, las capturas van a `~/Imágenes/ScreenShots`, o el equivalente
-en el idioma de la instalación: la carpeta madre la elige `user-dirs.dirs`, y no es
-«Pictures» en todas las máquinas. **Si ya había capturas en la carpeta anterior
-—`Capturas`— se sigue guardando ahí**: cambiar el nombre por omisión no puede
-partir en dos lo que alguien ya tenía guardado.
-
-## El orden importa, y es al revés de lo que parece
-
-**Primero los píxeles, después la ventana.** Crear una ventana de Tauri bajo
-demanda tarda entre uno y dos segundos —medido en el escritorio y en el selector de
-acentos—, y una herramienta de capturas que abre ventana y *después* captura pierde
-justo el momento que se quería guardar: el menú que estaba abierto se cerró, el
-cursor se movió, la notificación desapareció.
-
-Así que se captura al arrancar y la ventana muestra ese cuadro **congelado**.
-Medido en esta máquina, en release, con `cargo run --release --example tiempos`:
-
-```
-escribir el PNG    46 ms   1920x1080
-recortar            6 ms   300x200
+```mermaid
+<!--
+graph TD
+    A[Entrada: Teclado / Ratón / D-Bus / Sistema] --> B[Procesamiento: Core Rust + Tauri Commands]
+    B --> C[Salida: UI actualizada / Acciones del sistema]
+    style A fill:#e1f5fe
+    style C fill:#e8f5e9
+-->
 ```
 
-**Lo que ese ejemplo no mide es la conversación con el compositor**, y no por
-olvido: el permiso de captura es por ejecutable y lo tiene `/usr/bin/vasak-shot`,
-así que un binario compilado en un árbol de trabajo falla antes de pedir el primer
-buffer. Los números de acá son los de los pasos que sí se pueden medir en
-cualquier lado — y son los que importan para el argumento, porque ocurren enteros
-*después* de que el instante ya está congelado.
+### Componentes internos
 
-Que sean decenas de milisegundos y no unidades tampoco cambia nada: la ventana
-tarda mil o dos mil. Y de paso la selección se hace sobre una imagen quieta en
-lugar de sobre una pantalla que sigue cambiando debajo.
-
-(Los números que había acá antes —136 ms de captura, 295 ms de recorte— eran los
-de `grim` y de una compilación de depuración. Un README con números que nadie
-puede reproducir es peor que uno sin números: suenan verosímiles y se toman
-decisiones con ellos.)
-
-## Por qué los píxeles los toma esta aplicación y no `grim`
-
-**No porque `grim` esté mal**: hace esto bien y de ahí salió la forma de hacerlo.
-El motivo es de permisos. El escritorio limita qué programas pueden pedirle al
-compositor los protocolos que ven la sesión —`permisos-globales`, de
-`vasak-wayfire-plugins`— y esa lista es **por ejecutable**. Con `grim` adentro,
-cualquier programa capturaba la pantalla entera con dos líneas:
-
-```sh
-#!/usr/bin/env bash
-grim "$1"
+```mermaid
+<!--
+flowchart LR
+    subgraph App[Vasak shot]
+        UI[Frontend Vue 3 + vue-libvasak]
+        Core[Core Rust: lógica principal]
+        IPC[Tauri Commands / Eventos]
+        System[Systemd / D-Bus / PipeWire / Wayland]
+    end
+    UI --> IPC
+    IPC --> Core
+    Core --> DBus[(D-Bus / zbus)]
+    Core --> System
+    style UI fill:#f3e5f5
+    style Core fill:#e3f2fd
+    style DBus fill:#fff3e0
+    style System fill:#fce4ec
+-->
 ```
 
-Medido: capturó 290 950 bytes sin estar en ninguna lista. El permiso de compartir
-pantalla se saltaba llamando a la herramienta que sí lo tenía. Que los píxeles los
-tome esta aplicación es lo que dejó sacar a `grim` de la lista sin que el
-escritorio pierda las capturas — y capturar a mano desde una terminal dejó de
-andar, a propósito.
+### Integración en el sistema VasakOS
 
-Así que `zwlr_screencopy_manager_v1` se habla acá: copia **una salida** por vez a
-un buffer de memoria compartida, y componer es cosa nuestra. La posición y el
-tamaño lógicos salen de `xdg_output` y no de `wl_output`, cuyos números están en
-píxeles del dispositivo y no contemplan la escala.
+```mermaid
+<!--
+C4Context
+    title Vasak shot en VasakOS
+    Person(usuario, "Usuario", "Persona que usa el sistema")
+    System_Boundary(c1, "VasakOS") {
+        System(app, "Vasak shot", "")
+        System_Ext(settings, "vasak-settings", "Configuración central")
+        System_Ext(keyring, "vasak-keyring", "Secrets y claves")
+        System_Ext(accounts, "vasak-accounts", "Cuentas e identidad")
+        System_Ext(permissions, "vasak-permissions", "Permisos y portales")
+    }
+    System_Ext(systemd, "systemd", "Gestión de servicios")
+    System_Ext(dbus, "D-Bus", "Bus de mensajes del sistema")
+    System_Ext(wayland, "Wayland / Wayfire", "Compositor")
+    System_Ext(pipewire, "PipeWire", "Multimedia")
+    Rel(usuario, app, "Usa")
+    Rel(app, settings, "Lee/escribe config")
+    Rel(app, keyring, "Guarda/lee secrets")
+    Rel(app, accounts, "Identidad de cuenta")
+    Rel(app, permissions, "Solicita permisos")
+    Rel(app, systemd, "Activación / sockets")
+    Rel(app, dbus, "Expone / consume interfaces")
+    Rel(app, wayland, "Superficies / protocolos")
+    Rel(app, pipewire, "Streams de audio/video")
+-->
+```
 
-El recorte también es propio, y por dos razones que valen igual: una sola captura
-en lugar de dos —lo que se guarda es exactamente el instante que se vio— y porque
-la geometría del layout de salidas no coincide con las coordenadas de la pantalla
-en la que se está eligiendo.
+---
 
-El portapapeles sí es prestado: va por **`wl-copy`**, que es el que sabe declarar
-`image/png` en Wayland. El de Tauri maneja texto, y lo que hace útil una captura
-es poder pegarla como imagen.
+## Instalación
 
-### Cuando los monitores tienen escalas distintas
+### Arch Linux (repo oficial)
 
-El lienzo se compone en la escala **mayor** de todas las pantallas: bajar todo a
-la menor tiraría píxeles que existen. Eso deja a las de menor escala estiradas
-adentro de la imagen compuesta, así que de ahí no salen los recortes: de cada
-pantalla que hubo que estirar se guardan aparte **sus píxeles tal como llegaron**,
-y una selección que cabe entera en una de ellas se recorta de ésos. Sin eso, una
-captura de 400×300 en el monitor al 100 % se guardaba como un archivo de 600×400
-interpolado, con el selector diciendo 400×300.
+```bash
+pacman -S vasak-vasak-shot
+```
 
-De las que no se estiraron no se guarda nada: el lienzo ya tiene sus píxeles de
-verdad, y una segunda copia serían decenas de megabytes repetidos. Con un solo
-monitor —el caso de todos los días— no se guarda ninguno.
+### Debian / Ubuntu (.deb)
 
-## Tres cosas que costaron encontrar
+```bash
+wget https://github.com/Vasak-OS/vasak-shot/releases/download/v{{VERSION}}/vasak-vasak-shot_{{VERSION}}_amd64.deb
+sudo apt install ./vasak-vasak-shot_{{VERSION}}_amd64.deb
+```
 
-**El layer-shell tiene que iniciarse antes de que la ventana se mapee.** Con
-`visible: true`, `init_layer_shell` aborta con «assertion '!gtk_widget_get_mapped'
-failed» y cada llamada siguiente avisa «GtkWindow is not a layer surface». El
-resultado es una ventana de 800×600 con decoración en el medio de la pantalla en
-lugar de una superficie que tapa todo. La ventana arranca oculta y se muestra
-después.
+### Desde fuente
 
-**`wl-copy` se demoniza y hereda la salida estándar.** Con los descriptores
-heredados, quien lo llamó se queda esperando que el pipe se cierre — y no se cierra
-mientras el portapapeles tenga la imagen. Desde una terminal parece que la
-herramienta se colgó; desde un atajo, que nunca terminó. Su salida va a `null`.
+```bash
+git clone https://github.com/Vasak-OS/vasak-shot.git
+cd vasak-shot
 
-**La captura entra por el IPC y se dibuja desde un `blob:`, no desde
-`asset://`.** Las dos vías traen la misma imagen; lo que no traen es el mismo
-origen. Una imagen de otro origen —y `asset://` lo es— **contamina** el canvas
-donde se la dibuja, y un canvas contaminado no deja leer sus píxeles ni
-exportarlos: difuminar y pixelar dejan de tapar, y la captura anotada no se puede
-guardar, copiar ni subir. Tampoco avisa, porque la excepción cae adentro del
-`watch` que compone: lo que se ve es un dibujo que no aparece. El `blob:` hereda
-el origen del documento y el canvas queda limpio. Por eso `assetProtocol` está
-apagado y la política de contenido ya no nombra `asset:`.
+# Desarrollo (recarga en caliente frontend + backend)
+bun run dev
 
-**La imagen se verifica antes de usarla como fondo.** Si no carga, la ventana
-transparente deja ver el escritorio **vivo** debajo, y la selección parece
-funcionar mientras en realidad se elige sobre una pantalla que sigue moviéndose.
-Una falla que se disfraza de funcionamiento es peor que una que se ve, así que si
-no carga se dice.
+# Build producción
+bun run build
 
-## Dependencias
+# Solo frontend
+bun run build:frontend
 
-`wl-clipboard` para el portapapeles, `gtk-layer-shell` para la superficie que tapa
-todo, `libnotify` para el aviso al guardar y para la cuenta regresiva del retardo,
-`xdg-utils` para abrir la captura o su carpeta desde el aviso, y `curl` para
-subirla cuando hay una dirección configurada.
+# Solo backend Rust
+cargo build --release --locked
+```
 
-Para capturar no hace falta ninguna: el crate de Wayland trae su propia
-implementación del protocolo y **no** enlaza `libwayland-client` — comprobado con
-`readelf -d` sobre el binario.
+### Flatpak / AppImage
 
-## Dónde está cada ventana
+> *Placeholder: añadir cuando exista paquete Flatpak o AppImage oficial.*
 
-Se lo pregunta al **IPC de wayfire**, que es el único que lo sabe.
-`zwlr_foreign_toplevel_manager` —que es lo que este archivo suponía que hacía
-falta— informa títulos y estados, **no rectángulos**. El socket de wayfire no
-pasa por `permisos-globales`: es un socket Unix anunciado por una variable de
-entorno, no un global de Wayland, y esta aplicación ya lo usaba para saber dónde
-está el puntero.
+---
 
-Dos cosas que hay que saber para que las coordenadas den:
+## Uso rápido
 
-- **La geometría de una vista es relativa a su salida, no al layout.** Medido en
-  una sesión de dos monitores apilados: una ventana a pantalla completa en el de
-  abajo —que empieza en `y = 1080`— contesta `y = 0`. Hay que sumarle el origen
-  de su salida, que sale de `list-outputs`.
-- **Las ventanas de los otros escritorios están corridas un ancho de pantalla**,
-  así que recortar contra la salida las deja afuera sin tener que preguntar en
-  qué espacio de trabajo está cada una.
+```bash
+# Se lanza automáticamente (systemd --user) o manualmente:
+vasak-shot
+```
 
-Se pregunta **al arrancar**, junto con la captura y por la misma razón: lo que se
-señala tiene que coincidir con lo que la imagen congelada muestra.
+### Atajos / flags principales
 
-Sin wayfire la lista queda vacía, no se resalta nada y queda el arrastre.
+| Acción | Comando / Tecla |
+|--------|-----------------|
+| Acción principal | `vasak-shot` |
+| Configuración | `vasak-shot --config` |
+| Ayuda | `vasak-shot --help` |
 
-## Elegir la pantalla, y esperar antes de disparar
+> **Captura:** `assets/demo.gif` *(placeholder — sustituir por GIF real)*
 
-Con más de un monitor, la barra de abajo los lista por su nombre de conector y
-sus medidas. Elegir uno lo entrega entero, **sin mover el puntero hasta él**: la
-captura ya los contiene a todos, así que la otra pantalla no hay que ir a
-buscarla. Por línea de órdenes es `--salida NOMBRE`, y un nombre que no existe
-falla diciendo cuáles hay en lugar de guardar cualquier cosa.
+---
 
-El **retardo** es para lo que se cierra al perder el foco: un menú abierto, un
-desplegable, un globo de ayuda. Elegir 3, 5 o 10 segundos **cierra el selector**
-y vuelve a capturar cuando se cumplen — durante la espera no hay nada de esta
-aplicación en pantalla, que es el punto. Quien captura de nuevo es otro proceso,
-que arranca, espera y recién ahí toma los píxeles: el orden de siempre, píxeles
-antes que ventana.
+## Configuración
 
-La cuenta regresiva va en una notificación, que es lo único que puede aparecer
-sin robar el foco. **Se apaga un segundo antes del disparo**, porque si no
-saldría adentro de la foto.
+### Archivo de configuración
 
-## El aviso, y qué hacer con la captura
+```
+~/.config/vasak/vasak-shot.toml
+```
 
-El aviso de guardado trae tres botones: **Abrir**, **Abrir la carpeta** y
-**Copiar** —este último sólo cuando la captura no se copió ya, porque si no sería
-un botón que no hace nada—. Abrir va por `xdg-open`, así que respeta el visor y
-el gestor de archivos que la persona haya elegido.
+### Variables de entorno
 
-Los botones los muestra **otro proceso**. `notify-send --action` se queda
-esperando a que alguien elija, y la ventana del selector se cierra sola en cuanto
-la captura está entregada: si esperara, el gesto duraría lo que dure la
-notificación. Así que el selector deja atrás un hijo suelto —esta misma
-aplicación con `--aviso`— que se queda con la notificación y actúa cuando llega
-la respuesta.
+| Variable | Descripción | Por defecto |
+|----------|-------------|-------------|
+| `VASAK_DEBUG` | Activa logs de depuración en consola | `false` |
+| `VASAK_PROFILE` | Perfil de rendimiento: `balanced`, `performance`, `power-save` | `balanced` |
 
-Si el demonio de notificaciones no soporta acciones, los botones no aparecen y el
-aviso queda como estaba. No hay nada que detectar: es lo que hace `notify-send`.
+### Integración con `tauri-plugin-config-manager`
 
-## Subir la captura
+- Esquemas de color: respeta `--ui-primary`, `--ui-surface`, `--ui-focus`, `--ui-on-surface`, `--ui-border`
+- Tema de iconos: usa el tema del sistema (`vasakos-icon-theme`) vía `vicon` lookup
+- Radio de bordes: variable CSS `--ui-radius` del esquema activo (por defecto 12px)
+- Fuentes: `--ui-font-family`, `--ui-font-size-base` desde el esquema
 
-**Subir es publicar**, y por eso esto no se parece al resto de la herramienta:
+---
 
-- **No hay servicio por omisión.** Sin una dirección escrita a mano en las
-  preferencias, el botón de subir no existe. Un servicio puesto de fábrica
-  convierte un botón mal apretado en una publicación.
-- **Pregunta antes**, y dice a qué servidor va. Cuánto tiempo queda ahí no lo
-  sabemos —lo decide ese servidor— y se dice así en lugar de prometer un plazo.
-- **Sólo `https`.** Subir por `http` es publicar en texto plano, y `curl` habla
-  una docena de protocolos más —`file://` entre ellos— que con una dirección mal
-  escrita harían cualquier otra cosa. La comprobación está en Rust, que es el que
-  ejecuta.
-- **Sin metadatos.** El PNG se reescribe antes de mandarlo, así que viajan los
-  píxeles y nada más.
-- **Sin atajo de teclado.** Guardar es Intro y copiar es Ctrl+C; publicar no
-  puede estar a una tecla de distancia.
+## Desarrollo
 
-El enlace queda en el portapapeles y a la vista un momento antes de que la
-ventana se cierre. Se manda como `multipart/form-data`; el nombre del campo es
-`file` salvo que se escriba otro, porque algunos servicios piden `files[]`.
+### Requisitos
+
+- **Rust:** `rustup` toolchain estable (`rust-toolchain.toml` fija la versión)
+- **Node / bun:** `bun` ≥ 1.1 (nunca npm/yarn/pnpm para apps Tauri)
+- **Sistema:** `pkg-config`, `libgtk-3-dev`, `libwebkit2gtk-4.1-dev`, `libssl-dev`
+- *`libgtk-layer-shell-dev`, `wayland-protocols`, `wayfire-dev` para Wayland*
+
+### Dependencias de desarrollo
+
+#### Sistema (paquetes Arch / Debian / Fedora)
+
+`base-devel`, `pkgconf`, `libssl-dev`, `libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`, `gstreamer1.0-plugins-base`, `gstreamer1.0-plugins-good`, `libpipewire-0.3-dev`, `libwireplumber-0.5-dev`, `libdbus-1-dev`, `libudev-dev`, `libxkbcommon-dev`, `libwayland-dev`, `meson`, `ninja`, `clang`, `lld`
+
+#### Rust
+
+`rustup` → `stable` + `rustfmt` + `clippy`
+
+#### Node
+
+**Solo `bun`** (nunca npm/yarn/pnpm para apps Tauri). `bun --version` ≥ 1.1
+
+#### Herramientas CLI
+
+`just` (command runner), `cargo-binstall` (opcional), `cargo-llvm-cov` (para cobertura)
+
+### Correr la app en desarrollo
+
+```bash
+# Frontend (Vite dev server + Tauri dev)
+bun run tauri dev
+
+# Solo frontend (Vite)
+bun run dev
+
+# Solo backend (cargo watch)
+cargo watch -x "run --bin vasak-shot"
+```
+
+### Compilar / Build de release
+
+```bash
+# Build completo (frontend + backend + bundle)
+bun run tauri build
+
+# Solo frontend (para testear bundle después)
+bun run build
+
+# Solo backend Rust (binario optimizado)
+cargo build --release --locked
+
+# Paquetes nativos
+# Arch: makepkg -sf en PKGBUILDS/vasak-shot/
+# Debian: cargo deb --no-build --target-dir src-tauri/target/release/debian
+```
+
+### Targets principales
+
+```bash
+# Desarrollo (Tauri dev server + hot reload)
+bun run dev
+
+# Build producción
+bun run build
+
+# Solo frontend
+bun run build:frontend
+
+# Solo backend Rust
+cargo build --release --locked
+
+# Lint + tipos (pre-commit / CI)
+bunx --bun biome check .
+bunx vue-tsc --noEmit
+cargo fmt --check
+```
+
+### Pruebas
+
+```bash
+# Suite completa JS (Vitest via bun:test)
+bun test
+
+# Suite completa Rust (crates en pruebas_rust del CI)
+cargo test -p vasak-shot-core -p vasak-shot-ui --locked
+
+# Integración (requiere Wayfire corriendo)
+cargo test -p vasak-shot-integration --locked -- --ignored
+```
+
+### Convención de commits
+
+[Conventional Commits](https://www.conventionalcommits.org/es/v1.0.0/):
+
+```
+<tipo>(<ámbito>): <descripción corta>
+
+[cuerpo opcional]
+
+[pie opcional: Closes #N]
+```
+
+Tipos habituales: `feat`, `fix`, `bugfix`, `docs`, `ci`, `chore`, `security`, `refactor`, `perf`, `test`.
+
+### Cómo abrir PR
+
+1. Rama desde `origin/main`:
+   ```bash
+   git worktree add -b feat/tema ~/wt/vasak-shot-tema origin/main
+   ```
+2. Prefijos de rama: `fix/`, `feat/`, `bugfix/`, `docs/`, `ci/`, `chore/`, `security/`
+3. Escribe el fix → **`qa` escribe las pruebas** (fallan sin el fix) → suite verde → abre PR
+4. Al abrir PR, **cuatro cosas obligatorias**:
+   - Asignado a `JoaquinDecima`
+   - Etiqueta `enhancement` o `bug` (+ `ci` / `dependencies` si aplica)
+   - Añadido al proyecto «VasakOS Roadmap»
+   - Status **In Progress**
+
+---
+
+## Arquitectura (texto)
+
+### Crates / módulos principales
+
+| `vasak-shot-core` | Lógica compartida: estado, D-Bus, IPC |
+| `vasak-shot-ui` | Frontend Vue 3 + componentes vue-libvasak |
+| `vasak-shot-tauri` | Puente Tauri: commands, eventos, WebView |
+
+### Interfaces D-Bus / zbus expuestas
+
+| `org.vasak.Vasak-shot` | `GetState()`, `StateChanged(dict)`, `SetConfig(dict)` | Estado y control principal |
+| `org.vasak.Vasak-shot.Panel` | `SetPosition(string)`, `SetAutohide(bool)`, `Height(u32)` | Configuración panel en runtime |
+
+### Puntos de extensión
+
+- **Plugins:** Sistema de plugins modular
+- **Hooks:** Hooks de ciclo de vida
+- **API pública Rust:** API pública del crate principal
+
+### Features / Cargo features
+
+| Feature | Descripción | Default |
+|---------|-------------|---------|
+| `system-tray` | Bandeja del sistema + menú contextual | ✓ |
+| `notifications` | Integración libnotify / freedesktop | ✓ |
+| `updater` | Auto-actualización (tauri-plugin-updater) | |
+| `devtools` | DevTools en release (solo debug) | |
+| `experimental-wayland` | Protocolo Wayland inestable | |
+
+Y para apps Tauri+Vue: features del `tauri.conf.json` → `bundle` / `plugins` / `allowlist` (capabilities).
+
+---
+
+## Pruebas y calidad
+
+- **Cobertura objetivo:** ≥ 80 % del código nuevo (SonarCloud Quality Gate)
+- **Informes:** GitHub Actions → pestaña *SonarCloud Code Analysis* → enlace a SonarCloud
+- **Añadir pruebas:** ver `AGENTS.md` sección 9 (mapa de repos y comandos de prueba)
+- **Regla:** toda corrección lleva prueba escrita por `qa` que falla sin el fix
+
+---
+
+## Contribuir
+
+- **Guía:** [.github/CONTRIBUTING.md](https://github.com/Vasak-OS/.github/blob/main/CONTRIBUTING.md)
+- **Plantillas de issue:** [.github/ISSUE_TEMPLATE/](https://github.com/Vasak-OS/.github/tree/main/ISSUE_TEMPLATE)
+- **Código de conducta:** [CODE_OF_CONDUCT.md](https://github.com/Vasak-OS/.github/blob/main/CODE_OF_CONDUCT.md)
+
+---
+
+## Donadores / Sponsors
+
+[![Sponsors](https://img.shields.io/github/sponsors/Vasak-OS?style=flat&label=Sponsors)](https://github.com/sponsors/Vasak-OS)
+
+> **Backers:** *Actualizado automáticamente en CI desde GitHub Sponsors / OpenCollective / Polar.*
+
+[💖 Donar al proyecto](https://github.com/sponsors/Vasak-OS)
+
+---
 
 ## Licencia
 
-GPL-3.0-or-later.
+`GPL-3.0` — Copyright © 2026 **Vasak-OS Contributors**
+
+[Ver licencia completa](LICENSE)
