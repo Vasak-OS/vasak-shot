@@ -18,6 +18,7 @@ pub mod argumentos;
 pub mod aviso;
 pub mod captura;
 pub mod comandos;
+mod commands;
 pub mod destino;
 mod locales;
 pub mod pantalla;
@@ -363,6 +364,7 @@ pub fn run() {
             comandos::traducir_aviso,
             comandos::subir,
             comandos::subir_anotada,
+            commands::webkit::tune_webview,
         ])
         .setup(|app| {
             // El layer-shell tiene que correr en el hilo principal —GTK aborta

@@ -658,6 +658,8 @@ async function subir() {
 let desmontado = false;
 
 onMounted(async () => {
+	// Afina el WebKit de la ventana para bajar su consumo de memoria; sin bloquear.
+	invoke('tune_webview').catch(() => {});
 	window.addEventListener('keydown', alTeclado);
 	cargando.value = cargarAjustes();
 	// Sin esperarlas: que no se pueda saber dónde están las ventanas ni cuántas
