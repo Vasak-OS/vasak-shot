@@ -4225,7 +4225,7 @@ dependencies = [
 
 [[package]]
 name = "vasak-shot"
-version = "0.8.5"
+version = "0.8.6"
 dependencies = [
  "dirs 7.0.0",
  "gtk",
@@ -4247,6 +4247,7 @@ dependencies = [
  "wayland-client",
  "wayland-protocols",
  "wayland-protocols-wlr",
+ "webkit2gtk",
 ]
 
 [[package]]

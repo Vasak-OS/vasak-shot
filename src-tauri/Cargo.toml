@@ -1,6 +1,6 @@
 [package]
 name = "vasak-shot"
-version = "0.8.5"
+version = "0.8.6"
 description = "Capturas de pantalla de VasakOS"
 authors = ["Vasak Group", "Joaquin (Pato) Decima"]
 edition = "2021"
@@ -32,6 +32,10 @@ tauri-plugin-shell = "2"
 
 # Para la ventana sin decoración: la barra propia necesita mover y redimensionar.
 gtk = "0.18"
+
+# Para afinar el WebKit de la ventana y bajar su consumo de memoria. Ver
+# `commands/webkit.rs`.
+webkit2gtk = "2.0"
 
 # La superficie de selección tapa **todo**, panel incluido, así que no puede ser
 # una ventana normal: va en la capa de superposición del compositor. Mismo
