@@ -3609,9 +3609,9 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-config-manager"
-version = "2.10.0"
+version = "2.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "532d0b7e44c8491f038eab631d1d129034fe9f65c63291921d5850379fd99b59"
+checksum = "4dc1220dbb004be334cb5d138e64dba3b0d75b20c9e9766d56b055fb3823ad64"
 dependencies = [
  "dirs 6.0.0",
  "home",
@@ -4225,7 +4225,7 @@ dependencies = [
 
 [[package]]
 name = "vasak-shot"
-version = "0.8.6"
+version = "0.8.7"
 dependencies = [
  "dirs 7.0.0",
  "gtk",
