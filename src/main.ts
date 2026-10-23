@@ -6,6 +6,7 @@ import { createPinia } from 'pinia';
 import { createApp } from 'vue';
 import App from '@/App.vue';
 import { sanearUrl } from '@/tools/csp';
+import { saveTheme } from '@/tools/theme-cache';
 import '@/assets/main.css';
 import { captureFailures } from '@vasakgroup/plugin-vsk-journal';
 
@@ -73,6 +74,7 @@ await Promise.race([
 			}),
 		useConfigStore()
 			.loadConfig()
+			.then(() => saveTheme())
 			.catch((error: unknown) => {
 				console.error('No se pudo cargar la configuración', error);
 			}),
